@@ -1,24 +1,19 @@
 package com.example.smartdriver
 
+import android.app.Activity
 import android.content.Intent
-import android.os.Parcelable
-import kotlinx.parcelize.Parcelize // Importar para usar a anotação @Parcelize
 
 /**
- * Classe de dados simples para encapsular os dados da Media Projection
- * recebidos da Activity após o usuário conceder permissão.
- * Usa a anotação @Parcelize para gerar automaticamente o código Parcelable.
- *
- * @property resultCode O código de resultado retornado por onActivityResult.
- * @property data O Intent contendo os dados da projeção.
+ * Objeto Singleton para armazenar os dados da Media Projection.
+ * Substitui a data class Parcelable para acesso estático mais simples
+ * a partir de diferentes componentes (Activity, Service).
  */
-@Parcelize // Gera automaticamente a implementação Parcelable
-data class MediaProjectionData(
-    val resultCode: Int,
-    val data: Intent
-) : Parcelable
+object MediaProjectionData {
+    @Volatile var resultCode: Int = Activity.RESULT_CANCELED
+    @Volatile var resultData: Intent? = null
 
-// NOTA: Para usar @Parcelize, você pode precisar adicionar o plugin
-// 'kotlin-parcelize' no build.gradle (Module :app) se ainda não estiver lá.
-// Adicione `id("kotlin-parcelize")` dentro do bloco `plugins { ... }`
-// e sincronize o projeto.
+    fun clear() {
+        resultCode = Activity.RESULT_CANCELED
+        resultData = null
+    }
+}
