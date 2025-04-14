@@ -7,77 +7,82 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
+import android.view.ViewGroup // Import para LayoutParams
+import android.widget.FrameLayout // Import FrameLayout
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.example.smartdriver.databinding.ActivitySettingsBinding // Import ViewBinding
-import com.example.smartdriver.overlay.OverlayService // Import para enviar configs
-import java.util.Locale
+import com.example.smartdriver.overlay.OverlayService
+import com.example.smartdriver.overlay.OverlayView // Importa a OverlayView
+import com.example.smartdriver.utils.OfferData // Para dados de exemplo
+import com.example.smartdriver.utils.OfferRating // Para rating de exemplo (LEGADO, PODE SER REMOVIDO DEPOIS)
+import com.example.smartdriver.utils.EvaluationResult // <<< NOVO IMPORT
+import com.example.smartdriver.utils.IndividualRating // <<< NOVO IMPORT
+import com.example.smartdriver.utils.BorderRating // <<< NOVO IMPORT
 
-/**
- * Atividade para configurar os parâmetros da aplicação, como limiares de rentabilidade
- * e aparência do overlay. Salva as configurações em SharedPreferences.
- */
+import java.util.* // Para Locale
+
 class SettingsActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "SettingsActivity"
-        // Nome do arquivo de SharedPreferences para configurações
         private const val PREFS_NAME = "SmartDriverSettings"
 
-        // Chaves para as configurações salvas
-        private const val KEY_EXCELLENT_THRESHOLD = "excellent_threshold"
-        private const val KEY_GOOD_THRESHOLD = "good_threshold"
-        private const val KEY_MEDIUM_THRESHOLD = "medium_threshold"
-        private const val KEY_MIN_HOURLY_RATE = "min_hourly_rate"
-        private const val KEY_FONT_SIZE = "font_size_percent" // Salvar como percentual
-        private const val KEY_TRANSPARENCY = "transparency_percent" // Salvar como percentual
+        // --- NOVAS Chaves e Defaults para Limiares ---
+        private const val KEY_GOOD_KM_THRESHOLD = "good_km_threshold"
+        private const val KEY_POOR_KM_THRESHOLD = "poor_km_threshold"
+        private const val KEY_GOOD_HOUR_THRESHOLD = "good_hour_threshold"
+        private const val KEY_POOR_HOUR_THRESHOLD = "poor_hour_threshold"
 
-        // Valores padrão (usados se nada for salvo ainda)
-        private const val DEFAULT_EXCELLENT_THRESHOLD = 1.50
-        private const val DEFAULT_GOOD_THRESHOLD = 1.20
-        private const val DEFAULT_MEDIUM_THRESHOLD = 0.90
-        private const val DEFAULT_MIN_HOURLY_RATE = 15
+        private const val DEFAULT_GOOD_KM_THRESHOLD = 1.20 // Exemplo: 1.20 €/km ou mais é BOM
+        private const val DEFAULT_POOR_KM_THRESHOLD = 0.70 // Exemplo: 0.70 €/km ou menos é MAU
+        private const val DEFAULT_GOOD_HOUR_THRESHOLD = 15.0 // Exemplo: 15.0 €/h ou mais é BOM
+        private const val DEFAULT_POOR_HOUR_THRESHOLD = 8.0  // Exemplo: 8.0 €/h ou menos é MAU
+
+        // Chaves e Defaults para Aparência (inalterados)
+        private const val KEY_FONT_SIZE = "font_size_percent"
+        private const val KEY_TRANSPARENCY = "transparency_percent"
         private const val DEFAULT_FONT_SIZE_PERCENT = 100
         private const val DEFAULT_TRANSPARENCY_PERCENT = 15
 
-        // --- Métodos estáticos para ler configurações de outras partes do app ---
-
-        fun getExcellentThreshold(context: Context): Double {
+        // --- NOVOS Métodos para ler os limiares ---
+        fun getGoodKmThreshold(context: Context): Double {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getFloat(KEY_EXCELLENT_THRESHOLD, DEFAULT_EXCELLENT_THRESHOLD.toFloat()).toDouble()
+            // Usar getFloat e converter para Double para consistência com saving
+            return prefs.getFloat(KEY_GOOD_KM_THRESHOLD, DEFAULT_GOOD_KM_THRESHOLD.toFloat()).toDouble()
         }
 
-        fun getGoodThreshold(context: Context): Double {
+        fun getPoorKmThreshold(context: Context): Double {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getFloat(KEY_GOOD_THRESHOLD, DEFAULT_GOOD_THRESHOLD.toFloat()).toDouble()
+            return prefs.getFloat(KEY_POOR_KM_THRESHOLD, DEFAULT_POOR_KM_THRESHOLD.toFloat()).toDouble()
         }
 
-        fun getMediumThreshold(context: Context): Double {
+        fun getGoodHourThreshold(context: Context): Double {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getFloat(KEY_MEDIUM_THRESHOLD, DEFAULT_MEDIUM_THRESHOLD.toFloat()).toDouble()
+            return prefs.getFloat(KEY_GOOD_HOUR_THRESHOLD, DEFAULT_GOOD_HOUR_THRESHOLD.toFloat()).toDouble()
         }
 
-        fun getMinHourlyRate(context: Context): Int {
+        fun getPoorHourThreshold(context: Context): Double {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getInt(KEY_MIN_HOURLY_RATE, DEFAULT_MIN_HOURLY_RATE)
+            return prefs.getFloat(KEY_POOR_HOUR_THRESHOLD, DEFAULT_POOR_HOUR_THRESHOLD.toFloat()).toDouble()
         }
 
-        fun getFontSize(context: Context): Int { // Retorna percentual (ex: 100)
+        // Métodos para aparência (inalterados)
+        fun getFontSize(context: Context): Int {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return prefs.getInt(KEY_FONT_SIZE, DEFAULT_FONT_SIZE_PERCENT)
         }
-
-        fun getTransparency(context: Context): Int { // Retorna percentual (ex: 15)
+        fun getTransparency(context: Context): Int {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return prefs.getInt(KEY_TRANSPARENCY, DEFAULT_TRANSPARENCY_PERCENT)
         }
     }
 
-    // ViewBinding
     private lateinit var binding: ActivitySettingsBinding
-    // SharedPreferences
     private lateinit var prefs: SharedPreferences
+    private lateinit var previewOverlayView: OverlayView // Mantém a referência
+    private lateinit var previewContainer: FrameLayout // Referência para o container
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,263 +94,250 @@ class SettingsActivity : AppCompatActivity() {
         supportActionBar?.title = getString(R.string.settings_title)
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        previewContainer = binding.previewOverlayContainer
+        previewOverlayView = OverlayView(this)
+
+        val layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.view.Gravity.CENTER
+        )
+        previewOverlayView.layoutParams = layoutParams
+        previewContainer.addView(previewOverlayView)
+        Log.d(TAG,"Preview OverlayView adicionada ao container.")
+
         loadSettings()
         setupListeners()
+        setupInitialPreview() // Configura dados de exemplo
     }
 
     override fun onSupportNavigateUp(): Boolean {
-        onBackPressedDispatcher.onBackPressed()
-        return true
+        onBackPressedDispatcher.onBackPressed(); return true
     }
 
+    /** Configura a pré-visualização inicial com dados de exemplo */
+    private fun setupInitialPreview() {
+        val sampleOffer = OfferData(
+            value = "10.50", pickupDistance = "2.1", tripDistance = "8.4",
+            pickupDuration = "5", tripDuration = "15",
+            distance = "10.5", duration = "20" // Totais calculados como exemplo
+        )
+        // CRIA UM RESULTADO DE EXEMPLO - A COR DA BORDA E BARRAS SERÁ BASEADA NISSO
+        // (Neste exemplo: €/km = 1.0, €/h = 31.5 - assumindo defaults, km seria MÉDIO, hora seria BOM -> Borda AMARELA)
+        val sampleResult = EvaluationResult(
+            kmRating = IndividualRating.MEDIUM, // Exemplo
+            hourRating = IndividualRating.GOOD,  // Exemplo
+            combinedBorderRating = BorderRating.YELLOW // Exemplo
+        )
+        previewOverlayView.updateState(sampleResult, sampleOffer) // <<< Atualiza com EvaluationResult
+        updatePreviewAppearance()
+        Log.d(TAG,"Preview inicial configurado com dados de exemplo.")
+    }
 
-    /** Carrega os valores salvos nas SharedPreferences e atualiza os campos da UI */
+    /** Carrega os valores salvos e atualiza os campos da UI e a pré-visualização */
     private fun loadSettings() {
         Log.d(TAG, "Carregando configurações salvas...")
-        binding.excellentThresholdEditText.setText(String.format(Locale.US, "%.2f", prefs.getFloat(KEY_EXCELLENT_THRESHOLD, DEFAULT_EXCELLENT_THRESHOLD.toFloat())))
-        binding.goodThresholdEditText.setText(String.format(Locale.US, "%.2f", prefs.getFloat(KEY_GOOD_THRESHOLD, DEFAULT_GOOD_THRESHOLD.toFloat())))
-        binding.mediumThresholdEditText.setText(String.format(Locale.US, "%.2f", prefs.getFloat(KEY_MEDIUM_THRESHOLD, DEFAULT_MEDIUM_THRESHOLD.toFloat())))
-        binding.minHourlyRateEditText.setText(prefs.getInt(KEY_MIN_HOURLY_RATE, DEFAULT_MIN_HOURLY_RATE).toString())
 
-        val fontSize = prefs.getInt(KEY_FONT_SIZE, DEFAULT_FONT_SIZE_PERCENT)
-        binding.fontSizeSeekBar.progress = fontSize
-        binding.fontSizeValueTextView.text = "$fontSize%"
+        // Carrega novos limiares
+        binding.goodKmThresholdEditText.setText(String.format(Locale.US, "%.2f", getGoodKmThreshold(this)))
+        binding.poorKmThresholdEditText.setText(String.format(Locale.US, "%.2f", getPoorKmThreshold(this)))
+        binding.goodHourThresholdEditText.setText(String.format(Locale.US, "%.2f", getGoodHourThreshold(this)))
+        binding.poorHourThresholdEditText.setText(String.format(Locale.US, "%.2f", getPoorHourThreshold(this)))
 
-        val transparency = prefs.getInt(KEY_TRANSPARENCY, DEFAULT_TRANSPARENCY_PERCENT)
-        binding.transparencySeekBar.progress = transparency
-        binding.transparencyValueTextView.text = "$transparency% transp"
+        // Carrega aparência (inalterado)
+        val fontSize = getFontSize(this)
+        binding.fontSizeSeekBar.progress = fontSize; binding.fontSizeValueTextView.text = "$fontSize%"
+        val transparency = getTransparency(this)
+        binding.transparencySeekBar.progress = transparency; binding.transparencyValueTextView.text = "$transparency% transp"
 
-        Log.d(TAG, "Configurações carregadas.")
+        updatePreviewAppearance() // Atualiza preview com valores carregados
+        Log.d(TAG, "Configurações carregadas e aplicadas.")
     }
 
-    /** Configura os listeners para os botões e SeekBars */
+    /** Configura os listeners, incluindo atualização do preview */
     private fun setupListeners() {
-        binding.saveSettingsButton.setOnClickListener {
-            if (validateInputs()) {
-                saveSettings()
-                applySettingsToServices()
-                Toast.makeText(this, "Configurações salvas!", Toast.LENGTH_SHORT).show()
-                finish()
-            }
-        }
+        binding.saveSettingsButton.setOnClickListener { if (validateInputs()) { saveSettings(); applySettingsToServices(); finish() } }
+        binding.resetToDefaultsButton.setOnClickListener { resetToDefaults(); Toast.makeText(this, "Padrões restaurados.", Toast.LENGTH_SHORT).show() }
 
-        binding.resetToDefaultsButton.setOnClickListener {
-            resetToDefaults()
-            Toast.makeText(this, "Valores padrão restaurados.", Toast.LENGTH_SHORT).show()
-        }
-
+        // Listeners de aparência (inalterados)
         binding.fontSizeSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                binding.fontSizeValueTextView.text = "$progress%"
-            }
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { binding.fontSizeValueTextView.text = "$progress%"; updatePreviewAppearance() }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
-
         binding.transparencySeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                binding.transparencyValueTextView.text = "$progress% transp"
-            }
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { binding.transparencyValueTextView.text = "$progress% transp"; updatePreviewAppearance() }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        addThresholdValidationWatcher(binding.excellentThresholdEditText)
-        addThresholdValidationWatcher(binding.goodThresholdEditText)
-        addThresholdValidationWatcher(binding.mediumThresholdEditText)
-        // Também adicionamos watcher para o hourly rate para limpar erro
-        binding.minHourlyRateEditText.addTextChangedListener(object: TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                // Limpa o erro ao digitar, a validação completa ocorre no save
-                if (binding.minHourlyRateLayout.error != null) {
-                    binding.minHourlyRateLayout.error = null
-                }
-            }
-        })
+        // Listeners para limpar erros de validação ao digitar
+        addThresholdValidationWatcher(binding.goodKmThresholdEditText, binding.goodKmThresholdLayout)
+        addThresholdValidationWatcher(binding.poorKmThresholdEditText, binding.poorKmThresholdLayout)
+        addThresholdValidationWatcher(binding.goodHourThresholdEditText, binding.goodHourThresholdLayout)
+        addThresholdValidationWatcher(binding.poorHourThresholdEditText, binding.poorHourThresholdLayout)
     }
 
-    /** Valida os campos de entrada antes de salvar */
+    /** Atualiza a aparência da pré-visualização (fonte e transparência) */
+    private fun updatePreviewAppearance() {
+        val fontSizePercent = binding.fontSizeSeekBar.progress; val transparencyPercent = binding.transparencySeekBar.progress
+        val fontScale = fontSizePercent / 100f; val alpha = 1.0f - (transparencyPercent / 100f)
+        previewOverlayView.updateFontSize(fontScale); previewOverlayView.updateAlpha(alpha)
+        Log.d(TAG, "Preview atualizado: Fonte=$fontSizePercent%, Transp=$transparencyPercent%")
+    }
+
+    /** Valida os campos de entrada dos novos limiares */
     private fun validateInputs(): Boolean {
         var isValid = true
+        // Limpa erros antigos
+        binding.goodKmThresholdLayout.error = null
+        binding.poorKmThresholdLayout.error = null
+        binding.goodHourThresholdLayout.error = null
+        binding.poorHourThresholdLayout.error = null
 
-        // Limpar erros anteriores
-        binding.excellentThresholdLayout.error = null
-        binding.goodThresholdLayout.error = null
-        binding.mediumThresholdLayout.error = null
-        binding.minHourlyRateLayout.error = null
+        // Obtem textos
+        val goodKmText = binding.goodKmThresholdEditText.text?.toString() ?: ""
+        val poorKmText = binding.poorKmThresholdEditText.text?.toString() ?: ""
+        val goodHourText = binding.goodHourThresholdEditText.text?.toString() ?: ""
+        val poorHourText = binding.poorHourThresholdEditText.text?.toString() ?: ""
 
-        // Obter textos (usar toString() que é seguro para Editable?)
-        val excellentText = binding.excellentThresholdEditText.text?.toString() ?: ""
-        val goodText = binding.goodThresholdEditText.text?.toString() ?: ""
-        val mediumText = binding.mediumThresholdEditText.text?.toString() ?: ""
-        val hourlyText = binding.minHourlyRateEditText.text?.toString() ?: ""
-
-        // Validar Thresholds
+        // Valida €/km
         try {
-            // Verificar se estão vazios
-            if (excellentText.isBlank() || goodText.isBlank() || mediumText.isBlank()) {
-                if (excellentText.isBlank()) binding.excellentThresholdLayout.error = "Obrigatório"
-                if (goodText.isBlank()) binding.goodThresholdLayout.error = "Obrigatório"
-                if (mediumText.isBlank()) binding.mediumThresholdLayout.error = "Obrigatório"
-                isValid = false
-                throw NumberFormatException("Campos de threshold não podem estar vazios.") // Pula para catch
-            }
+            if (goodKmText.isBlank()) { binding.goodKmThresholdLayout.error = "Obrigatório"; isValid = false }
+            if (poorKmText.isBlank()) { binding.poorKmThresholdLayout.error = "Obrigatório"; isValid = false }
+            if (!isValid) throw NumberFormatException("Campos km vazios.") // Força catch se algum estiver vazio
 
-            val excellent = excellentText.replace(',', '.').toDouble()
-            val good = goodText.replace(',', '.').toDouble()
-            val medium = mediumText.replace(',', '.').toDouble()
+            val goodKm = goodKmText.replace(',', '.').toDouble()
+            val poorKm = poorKmText.replace(',', '.').toDouble()
 
-            if (excellent <= good || good <= medium) {
-                binding.excellentThresholdLayout.error = "Deve ser Excelente > Bom > Médio"
-                // Usar espaço para erro nos outros para não colapsar o layout
-                binding.goodThresholdLayout.error = " "
-                binding.mediumThresholdLayout.error = " "
+            if (goodKm <= poorKm) {
+                binding.goodKmThresholdLayout.error = "Bom deve ser > Mau"
+                binding.poorKmThresholdLayout.error = " " // Só para ocupar espaço
                 isValid = false
             }
-
-            if (excellent < 0 || good < 0 || medium < 0) {
-                // Adiciona erro específico se algum for negativo
-                if (excellent < 0) binding.excellentThresholdLayout.error = "Deve ser positivo"
-                if (good < 0) binding.goodThresholdLayout.error = "Deve ser positivo"
-                if (medium < 0) binding.mediumThresholdLayout.error = "Deve ser positivo"
+            if (goodKm < 0 || poorKm < 0) {
+                if (goodKm < 0) binding.goodKmThresholdLayout.error = "Positivo"
+                if (poorKm < 0) binding.poorKmThresholdLayout.error = "Positivo"
                 isValid = false
             }
-
         } catch (e: NumberFormatException) {
-            // O erro de campo obrigatório já foi tratado acima se estava vazio.
-            // Se chegou aqui, o formato é inválido.
-            if (isValid) { // Só mostra toast se não houve erro anterior
-                Toast.makeText(this, "Valores de limiar inválidos. Use números.", Toast.LENGTH_SHORT).show()
-            }
-            // Marca os campos problemáticos (se não estiverem já marcados como obrigatório)
-            if (binding.excellentThresholdLayout.error == null && !isValidDouble(excellentText)) binding.excellentThresholdLayout.error = "Inválido"
-            if (binding.goodThresholdLayout.error == null && !isValidDouble(goodText)) binding.goodThresholdLayout.error = "Inválido"
-            if (binding.mediumThresholdLayout.error == null && !isValidDouble(mediumText)) binding.mediumThresholdLayout.error = "Inválido"
-            isValid = false
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro inesperado na validação dos thresholds: ${e.message}")
-            Toast.makeText(this, "Erro ao validar limiares.", Toast.LENGTH_SHORT).show()
+            if (isValid) Toast.makeText(this, "Limiares €/km inválidos.", Toast.LENGTH_SHORT).show()
+            if (binding.goodKmThresholdLayout.error == null && !isValidDouble(goodKmText)) binding.goodKmThresholdLayout.error = "Inválido"
+            if (binding.poorKmThresholdLayout.error == null && !isValidDouble(poorKmText)) binding.poorKmThresholdLayout.error = "Inválido"
             isValid = false
         }
 
+        // Valida €/h
+        try {
+            if (goodHourText.isBlank()) { binding.goodHourThresholdLayout.error = "Obrigatório"; isValid = false }
+            if (poorHourText.isBlank()) { binding.poorHourThresholdLayout.error = "Obrigatório"; isValid = false }
+            if (!isValid) throw NumberFormatException("Campos hora vazios.")
 
-        // Validar Valor por Hora (Opcional, mas se preenchido, deve ser válido)
-        if (hourlyText.isNotBlank()) {
-            try {
-                val hourlyRate = hourlyText.toInt()
-                if (hourlyRate < 0) {
-                    binding.minHourlyRateLayout.error = "Valor por hora deve ser positivo."
-                    isValid = false
-                }
-            } catch (e: NumberFormatException) {
-                binding.minHourlyRateLayout.error = "Valor por hora inválido (deve ser número inteiro)."
+            val goodHour = goodHourText.replace(',', '.').toDouble()
+            val poorHour = poorHourText.replace(',', '.').toDouble()
+
+            if (goodHour <= poorHour) {
+                binding.goodHourThresholdLayout.error = "Bom deve ser > Mau"
+                binding.poorHourThresholdLayout.error = " "
                 isValid = false
             }
-        } // Se for branco, não há erro.
-
-
-        if (!isValid) {
-            Toast.makeText(this, "Verifique os campos marcados.", Toast.LENGTH_LONG).show()
+            if (goodHour < 0 || poorHour < 0) {
+                if (goodHour < 0) binding.goodHourThresholdLayout.error = "Positivo"
+                if (poorHour < 0) binding.poorHourThresholdLayout.error = "Positivo"
+                isValid = false
+            }
+        } catch (e: NumberFormatException) {
+            if (isValid) Toast.makeText(this, "Limiares €/h inválidos.", Toast.LENGTH_SHORT).show()
+            if (binding.goodHourThresholdLayout.error == null && !isValidDouble(goodHourText)) binding.goodHourThresholdLayout.error = "Inválido"
+            if (binding.poorHourThresholdLayout.error == null && !isValidDouble(poorHourText)) binding.poorHourThresholdLayout.error = "Inválido"
+            isValid = false
         }
 
+        if (!isValid) Toast.makeText(this, "Verifique os campos marcados.", Toast.LENGTH_LONG).show()
         return isValid
     }
 
-    /** Função auxiliar para verificar se uma string é um Double válido */
+    // Função auxiliar para validar double
     private fun isValidDouble(str: String): Boolean {
-        return try {
-            str.replace(',', '.').toDouble()
-            true
-        } catch (e: NumberFormatException) {
-            false
-        }
+        return try { str.replace(',', '.').toDouble(); true }
+        catch (e: NumberFormatException) { false }
     }
 
-    /** Adiciona um TextWatcher para limpar erros de validação enquanto o usuário digita */
-    private fun addThresholdValidationWatcher(editText: android.widget.EditText) {
+    // Função auxiliar para adicionar listener de validação
+    private fun addThresholdValidationWatcher(editText: android.widget.EditText, layout: com.google.android.material.textfield.TextInputLayout) {
         editText.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                // Limpa o erro do layout correspondente ao digitar
-                when(editText.id) {
-                    binding.excellentThresholdEditText.id -> binding.excellentThresholdLayout.error = null
-                    binding.goodThresholdEditText.id -> binding.goodThresholdLayout.error = null
-                    binding.mediumThresholdEditText.id -> binding.mediumThresholdLayout.error = null
+                layout.error = null // Limpa erro ao digitar
+                // Limpa erro do par também se a condição Bom > Mau estava ativa
+                when (layout.id) {
+                    R.id.goodKmThresholdLayout -> binding.poorKmThresholdLayout.error = null
+                    R.id.poorKmThresholdLayout -> binding.goodKmThresholdLayout.error = null
+                    R.id.goodHourThresholdLayout -> binding.poorHourThresholdLayout.error = null
+                    R.id.poorHourThresholdLayout -> binding.goodHourThresholdLayout.error = null
                 }
             }
-            override fun afterTextChanged(s: Editable?) {
-                // Poderia chamar validateInputs() aqui para validação em tempo real,
-                // mas pode ser pesado. Limpar o erro já ajuda.
-            }
+            override fun afterTextChanged(s: Editable?) {}
         })
     }
 
-
-    /** Salva as configurações atuais nas SharedPreferences */
+    /** Salva as configurações */
     private fun saveSettings() {
-        Log.d(TAG, "Salvando configurações...")
+        Log.d(TAG, "Salvando configurações...");
         val editor = prefs.edit()
-
         try {
-            // Usar os textos já validados (ou padrão se houve erro na validação - idealmente não chega aqui)
-            val excellentText = binding.excellentThresholdEditText.text?.toString() ?: DEFAULT_EXCELLENT_THRESHOLD.toString()
-            val goodText = binding.goodThresholdEditText.text?.toString() ?: DEFAULT_GOOD_THRESHOLD.toString()
-            val mediumText = binding.mediumThresholdEditText.text?.toString() ?: DEFAULT_MEDIUM_THRESHOLD.toString()
-            val hourlyText = binding.minHourlyRateEditText.text?.toString() ?: "" // Vazio se não preenchido
+            // Salva novos limiares como Float (mais compatível com SharedPreferences)
+            editor.putFloat(KEY_GOOD_KM_THRESHOLD, binding.goodKmThresholdEditText.text.toString().replace(',', '.').toFloat())
+            editor.putFloat(KEY_POOR_KM_THRESHOLD, binding.poorKmThresholdEditText.text.toString().replace(',', '.').toFloat())
+            editor.putFloat(KEY_GOOD_HOUR_THRESHOLD, binding.goodHourThresholdEditText.text.toString().replace(',', '.').toFloat())
+            editor.putFloat(KEY_POOR_HOUR_THRESHOLD, binding.poorHourThresholdEditText.text.toString().replace(',', '.').toFloat())
 
-            editor.putFloat(KEY_EXCELLENT_THRESHOLD, excellentText.replace(',', '.').toFloat())
-            editor.putFloat(KEY_GOOD_THRESHOLD, goodText.replace(',', '.').toFloat())
-            editor.putFloat(KEY_MEDIUM_THRESHOLD, mediumText.replace(',', '.').toFloat())
-
-            val hourlyRate = hourlyText.toIntOrNull() ?: DEFAULT_MIN_HOURLY_RATE
-            editor.putInt(KEY_MIN_HOURLY_RATE, hourlyRate)
-
+            // Salva aparência (inalterado)
             editor.putInt(KEY_FONT_SIZE, binding.fontSizeSeekBar.progress)
             editor.putInt(KEY_TRANSPARENCY, binding.transparencySeekBar.progress)
 
             editor.apply()
-            Log.i(TAG, "Configurações salvas com sucesso.")
+            Log.i(TAG, "Configurações salvas com novos limiares.")
+            Toast.makeText(this, "Configurações salvas!", Toast.LENGTH_SHORT).show()
 
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao salvar configurações: ${e.message}")
+            Log.e(TAG, "Erro ao salvar configurações: ${e.message}", e)
             Toast.makeText(this, "Erro ao salvar: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
-    /** Envia as configurações atualizadas para os serviços relevantes */
+    /** Envia as configs de APARÊNCIA para os serviços (lógica de limiares é usada internamente pelo Avaliador) */
     private fun applySettingsToServices() {
-        Log.d(TAG, "Enviando configurações atualizadas para OverlayService...")
+        Log.d(TAG, "Enviando configs de APARÊNCIA para OverlayService...");
         val intent = Intent(this, OverlayService::class.java).apply {
             action = OverlayService.ACTION_UPDATE_SETTINGS
             putExtra(OverlayService.EXTRA_FONT_SIZE, binding.fontSizeSeekBar.progress)
             putExtra(OverlayService.EXTRA_TRANSPARENCY, binding.transparencySeekBar.progress)
         }
-        try {
-            startService(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro ao enviar configurações para OverlayService: ${e.message}")
-        }
+        try { startService(intent) }
+        catch (e: Exception) { Log.e(TAG, "Erro ao enviar configs para OverlayService: ${e.message}") }
+        // Não é necessário enviar os limiares para o serviço, OfferEvaluator os lê diretamente
     }
 
-
-    /** Restaura os campos da UI para os valores padrão definidos */
+    /** Restaura padrões e atualiza UI e preview */
     private fun resetToDefaults() {
-        Log.d(TAG, "Restaurando configurações para os valores padrão.")
-        binding.excellentThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_EXCELLENT_THRESHOLD))
-        binding.goodThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_GOOD_THRESHOLD))
-        binding.mediumThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_MEDIUM_THRESHOLD))
-        binding.minHourlyRateEditText.setText(DEFAULT_MIN_HOURLY_RATE.toString())
+        Log.d(TAG, "Restaurando padrões.");
+        // Reseta novos limiares
+        binding.goodKmThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_GOOD_KM_THRESHOLD))
+        binding.poorKmThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_POOR_KM_THRESHOLD))
+        binding.goodHourThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_GOOD_HOUR_THRESHOLD))
+        binding.poorHourThresholdEditText.setText(String.format(Locale.US, "%.2f", DEFAULT_POOR_HOUR_THRESHOLD))
+
+        // Reseta aparência (inalterado)
         binding.fontSizeSeekBar.progress = DEFAULT_FONT_SIZE_PERCENT
-        binding.fontSizeValueTextView.text = "$DEFAULT_FONT_SIZE_PERCENT%"
         binding.transparencySeekBar.progress = DEFAULT_TRANSPARENCY_PERCENT
+        binding.fontSizeValueTextView.text = "$DEFAULT_FONT_SIZE_PERCENT%"
         binding.transparencyValueTextView.text = "$DEFAULT_TRANSPARENCY_PERCENT% transp"
 
-        // Limpar mensagens de erro
-        binding.excellentThresholdLayout.error = null
-        binding.goodThresholdLayout.error = null
-        binding.mediumThresholdLayout.error = null
-        binding.minHourlyRateLayout.error = null
+        // Limpa erros
+        binding.goodKmThresholdLayout.error = null; binding.poorKmThresholdLayout.error = null
+        binding.goodHourThresholdLayout.error = null; binding.poorHourThresholdLayout.error = null
+
+        updatePreviewAppearance() // Atualiza o preview
     }
 }

@@ -33,6 +33,13 @@
         <item name="android:listDivider">@color/gray_divider</item>
 
     </style>
+    <!-- Tema para a Splash Screen (sem ActionBar e fundo branco) -->
+    <style name="Theme.SmartDriver.Splash" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/white</item>
+        <!-- Opcional: Garante que a status bar também combine, se necessário -->
+        <!-- <item name="android:statusBarColor">@color/white</item> -->
+        <!-- <item name="android:windowLightStatusBar" tools:targetApi="m">true</item> -->
+    </style>
 
     <!-- O Android Studio pode gerar um tema aqui para a ActionBar inicial. Pode deixar como está. -->
     <style name="Theme.SmartDriver.NoActionBar">

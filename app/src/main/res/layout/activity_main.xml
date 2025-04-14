@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    android:background="@color/white"> <!-- Cor de fundo definida no tema, mas reforçada aqui -->
+    android:background="@color/white">
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/mainRootLayout"
@@ -14,7 +14,6 @@
         android:padding="16dp"
         tools:context=".MainActivity">
 
-        <!-- Título -->
         <TextView
             android:id="@+id/titleTextView"
             android:layout_width="wrap_content"
@@ -27,7 +26,6 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <!-- Status Geral (ON/OFF) -->
         <LinearLayout
             android:id="@+id/appStatusContainer"
             android:layout_width="match_parent"
@@ -38,7 +36,6 @@
             app:layout_constraintTop_toBottomOf="@+id/titleTextView"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
-
             <TextView
                 android:id="@+id/appStatusText"
                 android:layout_width="0dp"
@@ -47,17 +44,16 @@
                 android:text="@string/app_status_off"
                 android:textSize="18sp"
                 android:textStyle="bold"
-                android:textColor="@color/gray_inactive" /> <!-- Começa cinza -->
-
-            <!-- O Switch agora controla o estado geral da aplicação -->
+                android:textColor="@color/gray_inactive" /> <!-- Cor inicial, será atualizada no código -->
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/appStatusSwitch"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:checked="false"/> <!-- Começa desligado -->
+                android:checked="false"
+                app:thumbTint="@color/switch_thumb_selector"
+                app:trackTint="@color/switch_track_selector"/>
         </LinearLayout>
 
-        <!-- Linha Divisória -->
         <View
             android:id="@+id/divider_status"
             android:layout_width="match_parent"
@@ -66,7 +62,6 @@
             android:background="@color/gray_divider"
             app:layout_constraintTop_toBottomOf="@+id/appStatusContainer" />
 
-        <!-- Instruções -->
         <TextView
             android:id="@+id/instructionsHeaderTextView"
             android:layout_width="match_parent"
@@ -74,7 +69,7 @@
             android:layout_marginTop="16dp"
             android:text="@string/main_activity_instructions_title"
             android:textStyle="bold"
-            android:textColor="@color/purple_700"
+            android:textColor="@color/black"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/divider_status" />
 
@@ -89,7 +84,6 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/instructionsHeaderTextView" />
 
-        <!-- Linha Divisória -->
         <View
             android:id="@+id/divider_instructions"
             android:layout_width="match_parent"
@@ -98,7 +92,6 @@
             android:background="@color/gray_divider"
             app:layout_constraintTop_toBottomOf="@+id/instructionsTextView" />
 
-        <!-- Seção de Permissões / Configurações -->
         <TextView
             android:id="@+id/permissionsTitleTextView"
             android:layout_width="wrap_content"
@@ -111,7 +104,6 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/divider_instructions" />
 
-        <!-- 1. Acessibilidade -->
         <TextView
             android:id="@+id/accessibilityStatusTextView"
             android:layout_width="0dp"
@@ -124,7 +116,6 @@
             app:layout_constraintEnd_toStartOf="@+id/accessibilityButton"
             app:layout_constraintTop_toBottomOf="@+id/permissionsTitleTextView"
             app:layout_constraintBaseline_toBaselineOf="@+id/accessibilityButton"/>
-
         <Button
             android:id="@+id/accessibilityButton"
             android:layout_width="wrap_content"
@@ -135,7 +126,6 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/permissionsTitleTextView" />
 
-        <!-- 2. Overlay -->
         <TextView
             android:id="@+id/overlayStatusTextView"
             android:layout_width="0dp"
@@ -148,7 +138,6 @@
             app:layout_constraintEnd_toStartOf="@+id/overlayButton"
             app:layout_constraintTop_toBottomOf="@+id/accessibilityButton"
             app:layout_constraintBaseline_toBaselineOf="@+id/overlayButton"/>
-
         <Button
             android:id="@+id/overlayButton"
             android:layout_width="wrap_content"
@@ -159,7 +148,6 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/accessibilityButton" />
 
-        <!-- 3. Captura de Tela -->
         <TextView
             android:id="@+id/captureStatusTextView"
             android:layout_width="0dp"
@@ -172,7 +160,6 @@
             app:layout_constraintEnd_toStartOf="@+id/captureButton"
             app:layout_constraintTop_toBottomOf="@+id/overlayButton"
             app:layout_constraintBaseline_toBaselineOf="@+id/captureButton"/>
-
         <Button
             android:id="@+id/captureButton"
             android:layout_width="wrap_content"
@@ -183,7 +170,6 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/overlayButton" />
 
-        <!-- Linha Divisória -->
         <View
             android:id="@+id/divider_permissions"
             android:layout_width="match_parent"
@@ -192,7 +178,6 @@
             android:background="@color/gray_divider"
             app:layout_constraintTop_toBottomOf="@+id/captureButton" />
 
-        <!-- Botão de Configurações Avançadas -->
         <Button
             android:id="@+id/settingsButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -200,11 +185,12 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/settings_button"
+            android:textColor="@color/black"
+            app:strokeColor="@color/black"
             app:layout_constraintTop_toBottomOf="@+id/divider_permissions"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"/>
 
-        <!-- Switch de Salvar Imagens (Debug) -->
         <androidx.appcompat.widget.SwitchCompat
             android:id="@+id/saveImagesSwitch"
             android:layout_width="match_parent"
@@ -213,9 +199,10 @@
             android:text="@string/save_images_switch_label"
             android:textColor="@color/black"
             android:checked="false"
+            app:thumbTint="@color/switch_thumb_selector"
+            app:trackTint="@color/switch_track_selector"
             app:layout_constraintTop_toBottomOf="@+id/settingsButton" />
 
-        <!-- Botão Escondido para Encerrar (se necessário para debug) -->
         <Button
             android:id="@+id/shutdownButton"
             android:layout_width="wrap_content"
@@ -224,10 +211,11 @@
             android:text="@string/shutdown_button"
             android:visibility="gone"
             tools:visibility="visible"
+            android:textColor="@color/white"
+            android:backgroundTint="@color/black"
             app:layout_constraintTop_toBottomOf="@+id/saveImagesSwitch"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            android:backgroundTint="@android:color/holo_red_dark"/>
+            app:layout_constraintEnd_toEndOf="parent"/>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 </ScrollView>

@@ -1,281 +1,291 @@
 package com.example.smartdriver.overlay
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
-import android.os.Handler
-import android.os.Looper
+import android.graphics.*
+import android.text.TextPaint
 import android.util.Log
 import android.view.View
-import com.example.smartdriver.R // Import R para acessar cores e outros recursos
+// Removido import de com.example.smartdriver.R se não for usado diretamente aqui
 import com.example.smartdriver.utils.OfferData
-import com.example.smartdriver.utils.OfferRating
-import java.util.Locale
-import kotlin.math.min
-import kotlin.math.roundToInt
+// import com.example.smartdriver.utils.OfferRating // Removido - Não usamos mais
+import com.example.smartdriver.utils.EvaluationResult // <<< NOVO
+import com.example.smartdriver.utils.IndividualRating // <<< NOVO
+import com.example.smartdriver.utils.BorderRating     // <<< NOVO
+import java.math.RoundingMode
+import java.text.DecimalFormat
+import java.util.*
+import kotlin.math.max
 
-/**
- * View personalizada que implementa a interface visual do "semáforo"
- * que aparece sobre outros apps para indicar a qualidade das ofertas.
- * Esta versão não é tocável/arrastável.
- */
 class OverlayView(context: Context) : View(context) {
 
     companion object {
         private const val TAG = "OverlayView"
+        // --- Cores da Borda ---
+        private val BORDER_COLOR_GREEN = Color.parseColor("#4CAF50")
+        private val BORDER_COLOR_YELLOW = Color.parseColor("#FFC107")
+        private val BORDER_COLOR_RED = Color.parseColor("#F44336")
+        private val BORDER_COLOR_GRAY = Color.parseColor("#9E9E9E")
 
-        // Cores do semáforo (Podem ser definidas em colors.xml também)
-        private val COLOR_EXCELLENT = Color.parseColor("#4CAF50") // Verde
-        private val COLOR_GOOD = Color.parseColor("#8BC34A")      // Verde claro
-        private val COLOR_MEDIUM = Color.parseColor("#FFC107")     // Amarelo
-        private val COLOR_POOR = Color.parseColor("#F44336")       // Vermelho
-        private val COLOR_UNKNOWN = Color.parseColor("#9E9E9E")    // Cinza
-        private val TEXT_COLOR = Color.WHITE                      // Cor do texto dentro do semáforo
+        // --- Cores das Barras Indicadoras Internas ---
+        private val INDICATOR_COLOR_GOOD = BORDER_COLOR_GREEN
+        private val INDICATOR_COLOR_MEDIUM = BORDER_COLOR_YELLOW
+        private val INDICATOR_COLOR_POOR = BORDER_COLOR_RED
+        private val INDICATOR_COLOR_UNKNOWN = BORDER_COLOR_GRAY
 
-        // Constantes de animação
-        private const val MAX_PULSE_CYCLES = 3      // Quantos pulsos ao mostrar
-        private const val PULSE_DURATION_MS = 30L   // Intervalo da animação (mais lento)
-        private const val PULSE_MIN_SCALE = 0.9f    // Escala mínima do pulso
-        private const val PULSE_MAX_SCALE = 1.1f    // Escala máxima do pulso
-        private const val PULSE_STEP = 0.03f        // Incremento/decremento da escala
+        // --- Outras Cores ---
+        private val BACKGROUND_COLOR = Color.WHITE
+        private val TEXT_COLOR_LABEL = Color.DKGRAY
+        private val TEXT_COLOR_VALUE = Color.BLACK
+
+        // --- Dimensões (DP) ---
+        private const val PADDING_DP = 12f
+        private const val BORDER_WIDTH_DP = 3f
+        private const val CORNER_RADIUS_DP = 12f
+        private const val TEXT_SPACING_VERTICAL_DP = 3f
+        private const val LINE_SPACING_VERTICAL_DP = 6f
+        private const val TEXT_SPACING_HORIZONTAL_DP = 15f
+        private const val INDICATOR_BAR_WIDTH_DP = 4f
+        private const val INDICATOR_BAR_MARGIN_DP = 6f
+
+        // --- Tamanhos Fonte Base (SP) ---
+        private const val LABEL_TEXT_SIZE_SP = 11f
+        private const val VALUE_TEXT_SIZE_SP = 13f // Para km Totais, Tempo, Valor Oferta
+        private const val HIGHLIGHT_VALUE_TEXT_SIZE_SP = 14f // Para €/Km
+        // <<< NOVO TAMANHO FONTE para €/Hora >>>
+        private const val EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP = 15f // Ligeiramente maior para €/Hora
     }
 
-    // Estado atual do overlay
-    private var currentRating = OfferRating.UNKNOWN
+    // --- Estado e Configurações ---
+    private var currentEvaluationResult: EvaluationResult? = null
     private var currentOfferData: OfferData? = null
+    private var fontSizeScale = 1.0f
+    private var viewAlpha = 0.90f
 
-    // Configurações de aparência (serão atualizadas pelo OverlayService)
-    private var fontSizeScale = 1.0f // Escala para texto (1.0f = 100%)
-    private var viewAlpha = 0.85f    // Transparência inicial (0.0 = invisível, 1.0 = opaco)
+    // --- Paints ---
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BACKGROUND_COLOR }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = BORDER_COLOR_GRAY }
+    private val labelTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_LABEL; typeface = Typeface.DEFAULT }
+    private val valueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD }
+    private val highlightValueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD }
+    // <<< NOVO PAINT para €/Hora >>>
+    private val extraHighlightValueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD }
+    private val indicatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
-    // Animação de Pulso
-    private var isAnimating = false
-    private var pulseScale = 1.0f
-    private var pulseIncreasing = true
-    private var pulseAnimationCycles = 0
-    private val animationHandler = Handler(Looper.getMainLooper())
+    // --- Dimensões em Pixels ---
+    private var paddingPx: Float = 0f; private var borderRadiusPx: Float = 0f
+    private var textSpacingVerticalPx: Float = 0f; private var lineSpacingVerticalPx: Float = 0f
+    private var textSpacingHorizontalPx: Float = 0f
+    private var labelHeight: Float = 0f; private var valueHeight: Float = 0f
+    private var highlightValueHeight: Float = 0f
+    private var extraHighlightValueHeight: Float = 0f // <<< NOVA ALTURA
+    private var density: Float = 0f
+    private var indicatorBarWidthPx: Float = 0f
+    private var indicatorBarMarginPx: Float = 0f
+    // private var indicatorBarHeight: Float = 0f // Altura será baseada na fonte correspondente
 
-    // Objetos Paint para desenho (inicializados com anti-aliasing)
-    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = COLOR_UNKNOWN // Cor inicial
-    }
+    // Formatador
+    private val euroHoraFormatter = DecimalFormat("0.0").apply { roundingMode = RoundingMode.HALF_UP }
 
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = TEXT_COLOR
-        textAlign = Paint.Align.CENTER
-        textSize = 24f // Tamanho base, será ajustado pela escala e tamanho do círculo
-        // Considerar usar uma fonte mais legível se necessário
-        // typeface = Typeface.create(Typeface.DEFAULT_BOLD, Typeface.BOLD)
-    }
-
-    private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = TEXT_COLOR
-        textAlign = Paint.Align.CENTER
-        textSize = 20f // Tamanho base
-    }
-
-    private val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = TEXT_COLOR
-        textAlign = Paint.Align.CENTER
-        textSize = 16f // Tamanho base
-    }
+    // Retângulos
+    private val backgroundRect = RectF(); private val borderRect = RectF()
+    private val indicatorRect = RectF()
 
     init {
         Log.d(TAG, "OverlayView inicializada")
-        // A transparência inicial é definida via alpha na view
-        alpha = viewAlpha
+        alpha = viewAlpha; density = resources.displayMetrics.density
+        updateDimensionsAndPaints()
+    }
+
+    private fun updateDimensionsAndPaints() {
+        val scaledDensity = resources.displayMetrics.scaledDensity
+        paddingPx = PADDING_DP * density; borderRadiusPx = CORNER_RADIUS_DP * density
+        textSpacingVerticalPx = TEXT_SPACING_VERTICAL_DP * density
+        lineSpacingVerticalPx = LINE_SPACING_VERTICAL_DP * density
+        textSpacingHorizontalPx = TEXT_SPACING_HORIZONTAL_DP * density
+        borderPaint.strokeWidth = BORDER_WIDTH_DP * density
+
+        // Atualiza tamanhos de texto
+        labelTextPaint.textSize = LABEL_TEXT_SIZE_SP * scaledDensity * fontSizeScale
+        valueTextPaint.textSize = VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
+        highlightValueTextPaint.textSize = HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
+        extraHighlightValueTextPaint.textSize = EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale // <<< USA NOVO TAMANHO BASE
+
+        // Calcula alturas de texto
+        labelHeight = labelTextPaint.descent() - labelTextPaint.ascent()
+        valueHeight = valueTextPaint.descent() - valueTextPaint.ascent()
+        highlightValueHeight = highlightValueTextPaint.descent() - highlightValueTextPaint.ascent()
+        extraHighlightValueHeight = extraHighlightValueTextPaint.descent() - extraHighlightValueTextPaint.ascent() // <<< CALCULA NOVA ALTURA
+
+        // Atualiza dimensões das barras
+        indicatorBarWidthPx = INDICATOR_BAR_WIDTH_DP * density
+        indicatorBarMarginPx = INDICATOR_BAR_MARGIN_DP * density
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        updateDimensionsAndPaints()
+
+        // Medir largura MÁXIMA das colunas
+        val col1Width = max(labelTextPaint.measureText("km totais"), highlightValueTextPaint.measureText("99.99")) + indicatorBarMarginPx + indicatorBarWidthPx // €/km + barra
+        val col2Width = max(labelTextPaint.measureText("tempo"), valueTextPaint.measureText("999m"))
+        // Coluna 3: Compara largura do label "Valor Oferta" com o valor €/Hora (que é maior) + barra
+        val col3Width = max(labelTextPaint.measureText("Valor Oferta"), extraHighlightValueTextPaint.measureText("999.9€")) + indicatorBarMarginPx + indicatorBarWidthPx // €/h + barra
+
+        val requiredWidth = (paddingPx * 2) + col1Width + textSpacingHorizontalPx + col2Width + textSpacingHorizontalPx + col3Width
+
+        // Calcular altura necessária - Linha de cima agora usa a maior altura entre €/km e €/hora
+        val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight) // <<< USA A MAIOR ALTURA DA LINHA DE CIMA
+        val firstRowHeight = labelHeight + textSpacingVerticalPx + topHighlightHeight // <<< USA topHighlightHeight
+        val secondRowHeight = labelHeight + textSpacingVerticalPx + valueHeight
+        val requiredHeight = (paddingPx * 2) + firstRowHeight + lineSpacingVerticalPx + secondRowHeight
+
+        val measuredWidth = resolveSize(requiredWidth.toInt(), widthMeasureSpec)
+        val measuredHeight = resolveSize(requiredHeight.toInt(), heightMeasureSpec)
+
+        setMeasuredDimension(measuredWidth, measuredHeight)
+        Log.d(TAG,"onMeasure c/ Fonte €/h Maior - Required: ${requiredWidth.toInt()}x${requiredHeight.toInt()}, Measured: ${measuredWidth}x$measuredHeight")
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w,h,oldw,oldh)
+        backgroundRect.set(0f,0f,w.toFloat(),h.toFloat())
+        val halfBorder = borderPaint.strokeWidth / 2f
+        borderRect.set(halfBorder, halfBorder, w - halfBorder, h - halfBorder)
+        // Log.d(TAG,"onSizeChanged: ${w}x$h") // Menos verboso
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-
-        // Calcular raio do círculo (baseado no menor lado da view)
-        val centerX = width / 2f
-        val centerY = height / 2f
-        var radius = min(width, height) / 2f
-
-        // Aplicar escala da animação de pulso, se ativa
-        if (isAnimating) {
-            radius *= pulseScale
-        }
-
-        // 1. Desenhar o círculo de fundo
-        canvas.drawCircle(centerX, centerY, radius, backgroundPaint)
-
-        // 2. Ajustar tamanhos das fontes com base no raio atual e na escala definida
-        val baseTextSize = radius * 0.3f * fontSizeScale // 30% do raio, ajustado pela escala
-        textPaint.textSize = baseTextSize.coerceAtLeast(10f) // Mínimo de 10sp
-        valuePaint.textSize = (baseTextSize * 0.8f).coerceAtLeast(9f) // 80% do principal, min 9sp
-        detailPaint.textSize = (baseTextSize * 0.5f).coerceAtLeast(8f) // 50% do principal, min 8sp
-
-        // Distância vertical entre as linhas de texto (ajustada pelo raio)
-        val lineSpacing = radius * 0.15f // Espaçamento entre linhas
-
-        // 3. Desenhar textos (centralizados verticalmente)
-        val lines = mutableListOf<String>()
-
-        // Linha 1: Classificação
-        lines.add(getRatingText(currentRating))
-
-        // Linha 2: Valor €
-        currentOfferData?.value?.takeIf { it.isNotEmpty() }?.let {
-            lines.add("$it€")
-        }
-
-        // Linha 3: Valor €/km
-        currentOfferData?.calculateProfitability()?.let {
-            lines.add(String.format(Locale.getDefault(), "%.2f€/km", it))
-        }
-
-        // Linha 4: Valor €/h
-        currentOfferData?.calculateValuePerHour()?.let {
-            lines.add(String.format(Locale.getDefault(), "%.0f€/h", it))
-        }
-
-        // Linha 5: Distância Total
-        currentOfferData?.calculateTotalDistance()?.takeIf { it > 0 }?.let {
-            lines.add(String.format(Locale.getDefault(), "%.1f km", it))
-        }
-
-        // Calcular posição Y inicial para centralizar o bloco de texto
-        val totalTextHeight = (lines.size - 1) * lineSpacing + textPaint.textSize // Altura aproximada
-        var currentY = centerY - totalTextHeight / 2f + textPaint.textSize / 2f // Começa um pouco acima do centro
-
-        // Desenhar cada linha
-        lines.forEachIndexed { index, text ->
-            val paint = when (index) {
-                0 -> textPaint    // Classificação (maior)
-                1 -> valuePaint   // Valor €
-                else -> detailPaint // Outros detalhes
-            }
-            canvas.drawText(text, centerX, currentY, paint)
-            currentY += lineSpacing + paint.descent() // Mover para a próxima linha (ajustar espaçamento)
-        }
+        borderPaint.color = getBorderColor(currentEvaluationResult?.combinedBorderRating ?: BorderRating.GRAY)
+        canvas.drawRoundRect(backgroundRect, borderRadiusPx, borderRadiusPx, backgroundPaint)
+        canvas.drawRoundRect(borderRect, borderRadiusPx, borderRadiusPx, borderPaint)
+        drawOfferDetailsWithIndicators(canvas)
     }
 
-    /**
-     * Atualiza a escala de tamanho da fonte (e redesenha).
-     * @param scale Nova escala (ex: 1.0 para 100%, 1.5 para 150%).
-     */
+    /** Desenha os detalhes da oferta em layout 2x3 com barras indicadoras laterais */
+    private fun drawOfferDetailsWithIndicators(canvas: Canvas) {
+        updateDimensionsAndPaints()
+
+        // --- Obter e Formatar Dados ---
+        val euroPerKmStr = currentOfferData?.calculateProfitability()?.let { String.format(Locale.US, "%.2f", it) } ?: "--"
+        val euroPerHourStr = currentOfferData?.calculateValuePerHour()?.let { euroHoraFormatter.format(it).replace(",",".") + "€" } ?: "--"
+        val totalKmStr = currentOfferData?.calculateTotalDistance()?.takeIf { it > 0 }?.let { String.format(Locale.US, "%.1f km", it) } ?: "--"
+        val totalTimeStr = currentOfferData?.calculateTotalTimeMinutes()?.takeIf { it > 0 }?.let { "$it m" } ?: "--"
+        val mainValueStr = currentOfferData?.value?.takeIf { it.isNotEmpty() }?.let { "$it €" } ?: "--"
+
+        val kmRating = currentEvaluationResult?.kmRating ?: IndividualRating.UNKNOWN
+        val hourRating = currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN
+
+        // --- Calcular Posições ---
+        val leftColX = paddingPx
+        val centerColX = measuredWidth / 2f
+        val rightColX = measuredWidth - paddingPx
+
+        // Baselines Y (a linha de cima agora depende da maior altura entre €/km e €/hora)
+        val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight)
+        val topLabelY = paddingPx + labelHeight - labelTextPaint.descent()
+        val topValueY = topLabelY + topHighlightHeight + textSpacingVerticalPx // Baseline comum para valores da linha de cima
+        // Ajuste individual das baselines de €/km e €/h baseado em suas alturas específicas
+        val topValueKmBaseline = topValueY - highlightValueTextPaint.descent()
+        val topValueHourBaseline = topValueY - extraHighlightValueTextPaint.descent() // <<< USA ALTURA EXTRA
+
+        // Baselines da linha de baixo
+        val bottomLabelY = topValueY + lineSpacingVerticalPx + labelHeight - labelTextPaint.descent()
+        val bottomValueY = bottomLabelY + valueHeight + textSpacingVerticalPx - valueTextPaint.descent()
+
+        // Posições X para as barras indicadoras
+        val kmValueTextWidth = highlightValueTextPaint.measureText(euroPerKmStr)
+        val kmIndicatorLeft = leftColX + kmValueTextWidth + indicatorBarMarginPx
+        val kmIndicatorRight = kmIndicatorLeft + indicatorBarWidthPx
+
+        val hourValueTextWidth = extraHighlightValueTextPaint.measureText(euroPerHourStr) // <<< USA PAINT EXTRA
+        val hourIndicatorRight = rightColX - hourValueTextWidth - indicatorBarMarginPx
+        val hourIndicatorLeft = hourIndicatorRight - indicatorBarWidthPx
+
+        // Posições Y para as barras (alinhadas com os textos correspondentes)
+        val kmIndicatorTop = topValueKmBaseline + highlightValueTextPaint.ascent()
+        val kmIndicatorBottom = topValueKmBaseline + highlightValueTextPaint.descent()
+        val hourIndicatorTop = topValueHourBaseline + extraHighlightValueTextPaint.ascent() // <<< USA PAINT EXTRA
+        val hourIndicatorBottom = topValueHourBaseline + extraHighlightValueTextPaint.descent() // <<< USA PAINT EXTRA
+
+
+        // --- Desenhar Textos ---
+
+        // Coluna 1: €/Km e km totais
+        labelTextPaint.textAlign = Paint.Align.LEFT
+        highlightValueTextPaint.textAlign = Paint.Align.LEFT
+        valueTextPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText("€/Km", leftColX, topLabelY, labelTextPaint)
+        canvas.drawText(euroPerKmStr, leftColX, topValueKmBaseline, highlightValueTextPaint) // Usa baseline específica
+        canvas.drawText("km totais", leftColX, bottomLabelY, labelTextPaint)
+        canvas.drawText(totalKmStr, leftColX, bottomValueY, valueTextPaint)
+
+        // Coluna 2: Tempo
+        labelTextPaint.textAlign = Paint.Align.CENTER
+        valueTextPaint.textAlign = Paint.Align.CENTER
+        canvas.drawText("tempo", centerColX, topLabelY, labelTextPaint)
+        canvas.drawText(totalTimeStr, centerColX, topValueKmBaseline, valueTextPaint) // Usa baseline da linha de cima
+
+        // Coluna 3: €/Hora e Valor Oferta <<< POSIÇÃO CORRIGIDA
+        labelTextPaint.textAlign = Paint.Align.RIGHT
+        extraHighlightValueTextPaint.textAlign = Paint.Align.RIGHT // <<< USA PAINT EXTRA
+        valueTextPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("€/Hora", rightColX, topLabelY, labelTextPaint) // €/Hora em cima
+        canvas.drawText(euroPerHourStr, rightColX, topValueHourBaseline, extraHighlightValueTextPaint) // Usa baseline e paint específicos
+        canvas.drawText("Valor Oferta", rightColX, bottomLabelY, labelTextPaint) // Valor em baixo
+        canvas.drawText(mainValueStr, rightColX, bottomValueY, valueTextPaint) // Valor em baixo
+
+        // --- Desenhar Barras Indicadoras ---
+
+        // Barra Indicadora para €/km (Coluna 1, linha de cima)
+        indicatorPaint.color = getIndicatorColor(kmRating)
+        indicatorRect.set(kmIndicatorLeft, kmIndicatorTop, kmIndicatorRight, kmIndicatorBottom)
+        canvas.drawRect(indicatorRect, indicatorPaint)
+
+        // Barra Indicadora para €/hora (Coluna 3, linha de cima) <<< POSIÇÃO CORRIGIDA
+        indicatorPaint.color = getIndicatorColor(hourRating)
+        indicatorRect.set(hourIndicatorLeft, hourIndicatorTop, hourIndicatorRight, hourIndicatorBottom) // Usa top/bottom do €/Hora
+        canvas.drawRect(indicatorRect, indicatorPaint)
+    }
+
+    // --- Métodos de atualização (inalterados) ---
     fun updateFontSize(scale: Float) {
-        Log.d(TAG, "Atualizando escala de fonte: $scale")
-        fontSizeScale = scale.coerceIn(0.5f, 2.0f) // Limitar escala entre 50% e 200%
-        invalidate() // Força redesenho
-    }
-
-    /**
-     * Atualiza a transparência da view (e redesenha).
-     * @param alpha Valor alpha (0.0 = transparente, 1.0 = opaco).
-     */
-    fun updateAlpha(alphaValue: Float) {
-        Log.d(TAG, "Atualizando alpha (transparência): $alphaValue")
-        viewAlpha = alphaValue.coerceIn(0.0f, 1.0f) // Limitar alpha entre 0 e 1
-        this.alpha = viewAlpha // Aplica na view
-        invalidate() // Força redesenho
-    }
-
-
-    /**
-     * Atualiza o estado visual com base na avaliação da oferta e inicia animação.
-     * @param rating Nova classificação da oferta.
-     * @param offerData Dados detalhados da oferta (para exibir valores).
-     */
-    fun updateState(rating: OfferRating, offerData: OfferData?) {
-        Log.d(TAG, "Atualizando estado para $rating com dados: $offerData")
-        currentRating = rating
-        currentOfferData = offerData
-
-        // Atualizar a cor de fundo com base na classificação
-        backgroundPaint.color = getRatingColor(rating)
-
-        // Reiniciar controle de ciclos de animação e iniciar pulso
-        pulseAnimationCycles = 0
-        startPulseAnimation()
-
-        // Redesenhar a view com os novos dados e cor
+        Log.d(TAG, "Atualizando escala fonte: $scale")
+        fontSizeScale = scale.coerceIn(0.5f, 2.0f)
+        updateDimensionsAndPaints()
+        requestLayout()
         invalidate()
     }
-
-    /** Inicia a animação de pulso para chamar atenção */
-    private fun startPulseAnimation() {
-        // Cancelar animação anterior se estiver em andamento
-        animationHandler.removeCallbacksAndMessages(null)
-
-        isAnimating = true
-        pulseScale = PULSE_MIN_SCALE // Começa pequeno
-        pulseIncreasing = true
-        pulseAnimationCycles = 0 // Reseta contagem de ciclos
-
-        // Runnable para a animação
-        val pulseRunnable = object : Runnable {
-            override fun run() {
-                if (!isAnimating) return // Para se a animação for cancelada
-
-                // Atualizar escala
-                if (pulseIncreasing) {
-                    pulseScale += PULSE_STEP
-                    if (pulseScale >= PULSE_MAX_SCALE) {
-                        pulseScale = PULSE_MAX_SCALE
-                        pulseIncreasing = false
-                    }
-                } else {
-                    pulseScale -= PULSE_STEP
-                    if (pulseScale <= PULSE_MIN_SCALE) {
-                        pulseScale = PULSE_MIN_SCALE
-                        pulseIncreasing = true
-                        pulseAnimationCycles++ // Completou um ciclo
-                    }
-                }
-
-                // Redesenhar a view
-                invalidate()
-
-                // Continuar a animação se não atingiu o limite de ciclos
-                if (pulseAnimationCycles < MAX_PULSE_CYCLES) {
-                    animationHandler.postDelayed(this, PULSE_DURATION_MS)
-                } else {
-                    // Parar animação após os ciclos
-                    isAnimating = false
-                    pulseScale = 1.0f // Volta ao tamanho normal
-                    invalidate() // Redesenha no tamanho final
-                    Log.d(TAG, "Animação de pulso concluída.")
-                }
-            }
-        }
-        // Iniciar a animação
-        animationHandler.post(pulseRunnable)
+    fun updateAlpha(alphaValue: Float) {
+        Log.d(TAG, "Atualizando alpha: $alphaValue")
+        viewAlpha = alphaValue.coerceIn(0.0f, 1.0f)
+        this.alpha = viewAlpha
+        invalidate()
     }
-
-    /** Obtém o texto curto a ser exibido para cada classificação */
-    private fun getRatingText(rating: OfferRating): String {
+    fun updateState(evaluationResult: EvaluationResult?, offerData: OfferData?) {
+        Log.d(TAG, "Atualizando estado: Borda=${evaluationResult?.combinedBorderRating}, Km=${evaluationResult?.kmRating}, Hora=${evaluationResult?.hourRating}")
+        currentEvaluationResult = evaluationResult
+        currentOfferData = offerData
+        requestLayout()
+        invalidate()
+    }
+    private fun getBorderColor(rating: BorderRating): Int {
         return when (rating) {
-            OfferRating.EXCELLENT -> "EXC" // Ou "ÓTIMA"
-            OfferRating.GOOD -> "BOA"
-            OfferRating.MEDIUM -> "OK"   // Ou "MÉDIA"
-            OfferRating.POOR -> "RUIM" // Ou "MÁ"
-            OfferRating.UNKNOWN -> "?"
+            BorderRating.GREEN -> BORDER_COLOR_GREEN
+            BorderRating.YELLOW -> BORDER_COLOR_YELLOW
+            BorderRating.RED -> BORDER_COLOR_RED
+            BorderRating.GRAY -> BORDER_COLOR_GRAY
         }
     }
-
-    /** Obtém a cor de fundo correspondente a cada classificação */
-    private fun getRatingColor(rating: OfferRating): Int {
+    private fun getIndicatorColor(rating: IndividualRating): Int {
         return when (rating) {
-            OfferRating.EXCELLENT -> COLOR_EXCELLENT
-            OfferRating.GOOD -> COLOR_GOOD
-            OfferRating.MEDIUM -> COLOR_MEDIUM
-            OfferRating.POOR -> COLOR_POOR
-            OfferRating.UNKNOWN -> COLOR_UNKNOWN
+            IndividualRating.GOOD -> INDICATOR_COLOR_GOOD
+            IndividualRating.MEDIUM -> INDICATOR_COLOR_MEDIUM
+            IndividualRating.POOR -> INDICATOR_COLOR_POOR
+            IndividualRating.UNKNOWN -> INDICATOR_COLOR_UNKNOWN
         }
     }
-
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        // Parar a animação se a view for removida da janela para evitar leaks
-        animationHandler.removeCallbacksAndMessages(null)
-        isAnimating = false
-        Log.d(TAG, "OverlayView detached from window, animação parada.")
+        Log.d(TAG, "OverlayView detached.")
     }
 }
