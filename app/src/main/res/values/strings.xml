@@ -1,0 +1,53 @@
+<resources>
+    <!-- Nome Principal da Aplicação -->
+    <string name="app_name">SmartDriver</string>
+
+    <!-- Títulos das Telas -->
+    <string name="title_activity_settings">Configurações</string>
+
+    <!-- Textos para MainActivity (alguns baseados no layout original) -->
+    <string name="service_inactive">Serviço inativo. Clique para ativar.</string>
+    <string name="service_active">Serviço ativo e monitorando</string>
+    <string name="settings_button">CONFIGURAÇÕES AVANÇADAS</string>
+    <string name="service_button">Configurar Serviço de Acessibilidade</string>
+    <string name="overlay_button">Permitir overlay (semáforo)</string>
+    <string name="capture_button">Iniciar Captura de Tela</string>
+    <string name="shutdown_button">ENCERRAR APLICATIVO</string> <!-- Mantido, mesmo se botão ficar oculto -->
+    <string name="activate_overlay_switch">Ativar semáforo de ofertas</string>
+    <string name="save_images_switch_label">Salvar capturas de tela na galeria</string>
+    <string name="app_status_on">SmartDriver ON</string>
+    <string name="app_status_off">SmartDriver OFF</string>
+    <string name="main_activity_instructions_title">❓ INSTRUÇÕES DE CONFIGURAÇÃO</string>
+    <string name="main_activity_instructions_text">Siga estes passos na ordem para configurar o SmartDriver:\n\n1. Ative o serviço de acessibilidade (primeiro botão)\n2. Permita o overlay do semáforo (segundo botão)\n3. Conceda permissão de captura de tela (terceiro botão)\n4. Ligue o switch para ativar o semáforo\n\nDepois, abra o app Uber Driver e mantenha o SmartDriver rodando em segundo plano.</string>
+
+
+    <!-- Configurações (SettingsActivity) -->
+    <string name="settings_title">Configurações do SmartDriver</string>
+    <string name="threshold_section_title">Limiares de Classificação (€/km)</string>
+    <string name="excellent_threshold">Valor para classificação EXCELENTE:</string>
+    <string name="good_threshold">Valor para classificação BOA:</string>
+    <string name="medium_threshold">Valor para classificação MÉDIA:</string>
+    <string name="threshold_hint">Ex: 1.50</string>
+    <string name="good_threshold_hint">Ex: 1.20</string>
+    <string name="medium_threshold_hint">Ex: 0.90</string>
+
+    <string name="hourly_section_title">Valores por Hora (€/h)</string>
+    <string name="min_hourly_rate">Valor por hora mínimo desejado:</string>
+    <string name="hourly_rate_hint">Ex: 15</string>
+
+    <string name="semaphore_section_title">Configurações do Semáforo</string>
+    <string name="font_size">Tamanho da fonte:</string>
+    <string name="transparency">Transparência do semáforo:</string>
+    <string name="font_size_default_text">100%</string>
+    <string name="transparency_default_text">15% transparência</string>
+
+    <string name="other_settings_title">Outras Configurações</string>
+    <string name="save_screenshots">Salvar capturas de tela para debug</string>
+
+    <string name="save_settings">SALVAR CONFIGURAÇÕES</string>
+    <string name="reset_defaults">RESTAURAR PADRÕES</string>
+
+    <!-- Descrição do Serviço de Acessibilidade (usada no AndroidManifest e Configurações do Sistema) -->
+    <string name="accessibility_service_description">O SmartDriver monitora as ofertas de viagem em aplicativos como Uber para calcular sua rentabilidade em tempo real. Isso permite que você decida rapidamente se uma oferta vale a pena aceitar.</string>
+
+</resources>
