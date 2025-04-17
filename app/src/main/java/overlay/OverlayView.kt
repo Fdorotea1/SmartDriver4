@@ -21,21 +21,21 @@ class OverlayView(context: Context) : View(context) {
     companion object {
         private const val TAG = "OverlayView"
         // --- Cores da Borda ---
-        private val BORDER_COLOR_GREEN = Color.parseColor("#4CAF50")
-        private val BORDER_COLOR_YELLOW = Color.parseColor("#FFC107")
-        private val BORDER_COLOR_RED = Color.parseColor("#F44336")
-        private val BORDER_COLOR_GRAY = Color.parseColor("#9E9E9E")
+        private val BORDER_COLOR_GREEN = Color.parseColor("#4CAF50") // Verde (Bom/Bom)
+        private val BORDER_COLOR_YELLOW = Color.parseColor("#FFC107") // Amarelo (Misto/Médio)
+        private val BORDER_COLOR_RED = Color.parseColor("#F44336")   // Vermelho (Mau/Mau)
+        private val BORDER_COLOR_GRAY = Color.parseColor("#9E9E9E")  // Cinza (Desconhecido)
 
-        // --- Cores das Barras Indicadoras Internas ---
+        // --- Cores das Barras Indicadoras Internas E DOS VALORES (€/km, €/h) ---
         private val INDICATOR_COLOR_GOOD = BORDER_COLOR_GREEN
-        private val INDICATOR_COLOR_MEDIUM = BORDER_COLOR_YELLOW
+        private val INDICATOR_COLOR_MEDIUM = BORDER_COLOR_YELLOW // Amarelo para Médio
         private val INDICATOR_COLOR_POOR = BORDER_COLOR_RED
-        private val INDICATOR_COLOR_UNKNOWN = BORDER_COLOR_GRAY
+        private val INDICATOR_COLOR_UNKNOWN = Color.DKGRAY // Cinza escuro para desconhecido
 
         // --- Outras Cores ---
         private val BACKGROUND_COLOR = Color.WHITE
-        private val TEXT_COLOR_LABEL = Color.DKGRAY
-        private val TEXT_COLOR_VALUE = Color.BLACK
+        private val TEXT_COLOR_LABEL = Color.DKGRAY // Cinza escuro para labels
+        private val TEXT_COLOR_VALUE = Color.BLACK // Preto para valores padrão (km, tempo, valor)
 
         // --- Dimensões (DP) ---
         private const val PADDING_DP = 12f
@@ -51,8 +51,7 @@ class OverlayView(context: Context) : View(context) {
         private const val LABEL_TEXT_SIZE_SP = 11f
         private const val VALUE_TEXT_SIZE_SP = 13f // Para km Totais, Tempo, Valor Oferta
         private const val HIGHLIGHT_VALUE_TEXT_SIZE_SP = 14f // Para €/Km
-        // <<< NOVO TAMANHO FONTE para €/Hora >>>
-        private const val EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP = 15f // Ligeiramente maior para €/Hora
+        private const val EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP = 15f // Para €/Hora
     }
 
     // --- Estado e Configurações ---
@@ -66,9 +65,8 @@ class OverlayView(context: Context) : View(context) {
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = BORDER_COLOR_GRAY }
     private val labelTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_LABEL; typeface = Typeface.DEFAULT }
     private val valueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD }
-    private val highlightValueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD }
-    // <<< NOVO PAINT para €/Hora >>>
-    private val extraHighlightValueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD }
+    private val highlightValueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD } // Para €/km
+    private val extraHighlightValueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_VALUE; typeface = Typeface.DEFAULT_BOLD } // Para €/h
     private val indicatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
     // --- Dimensões em Pixels ---
@@ -77,11 +75,10 @@ class OverlayView(context: Context) : View(context) {
     private var textSpacingHorizontalPx: Float = 0f
     private var labelHeight: Float = 0f; private var valueHeight: Float = 0f
     private var highlightValueHeight: Float = 0f
-    private var extraHighlightValueHeight: Float = 0f // <<< NOVA ALTURA
+    private var extraHighlightValueHeight: Float = 0f
     private var density: Float = 0f
     private var indicatorBarWidthPx: Float = 0f
     private var indicatorBarMarginPx: Float = 0f
-    // private var indicatorBarHeight: Float = 0f // Altura será baseada na fonte correspondente
 
     // Formatador
     private val euroHoraFormatter = DecimalFormat("0.0").apply { roundingMode = RoundingMode.HALF_UP }
@@ -91,7 +88,7 @@ class OverlayView(context: Context) : View(context) {
     private val indicatorRect = RectF()
 
     init {
-        Log.d(TAG, "OverlayView inicializada")
+        // Log.d(TAG, "OverlayView inicializada") // Menos verboso
         alpha = viewAlpha; density = resources.displayMetrics.density
         updateDimensionsAndPaints()
     }
@@ -104,19 +101,16 @@ class OverlayView(context: Context) : View(context) {
         textSpacingHorizontalPx = TEXT_SPACING_HORIZONTAL_DP * density
         borderPaint.strokeWidth = BORDER_WIDTH_DP * density
 
-        // Atualiza tamanhos de texto
         labelTextPaint.textSize = LABEL_TEXT_SIZE_SP * scaledDensity * fontSizeScale
         valueTextPaint.textSize = VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
         highlightValueTextPaint.textSize = HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
-        extraHighlightValueTextPaint.textSize = EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale // <<< USA NOVO TAMANHO BASE
+        extraHighlightValueTextPaint.textSize = EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
 
-        // Calcula alturas de texto
         labelHeight = labelTextPaint.descent() - labelTextPaint.ascent()
         valueHeight = valueTextPaint.descent() - valueTextPaint.ascent()
         highlightValueHeight = highlightValueTextPaint.descent() - highlightValueTextPaint.ascent()
-        extraHighlightValueHeight = extraHighlightValueTextPaint.descent() - extraHighlightValueTextPaint.ascent() // <<< CALCULA NOVA ALTURA
+        extraHighlightValueHeight = extraHighlightValueTextPaint.descent() - extraHighlightValueTextPaint.ascent()
 
-        // Atualiza dimensões das barras
         indicatorBarWidthPx = INDICATOR_BAR_WIDTH_DP * density
         indicatorBarMarginPx = INDICATOR_BAR_MARGIN_DP * density
     }
@@ -124,17 +118,14 @@ class OverlayView(context: Context) : View(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         updateDimensionsAndPaints()
 
-        // Medir largura MÁXIMA das colunas
-        val col1Width = max(labelTextPaint.measureText("km totais"), highlightValueTextPaint.measureText("99.99")) + indicatorBarMarginPx + indicatorBarWidthPx // €/km + barra
+        val col1Width = max(labelTextPaint.measureText("km totais"), highlightValueTextPaint.measureText("99.99")) + indicatorBarMarginPx + indicatorBarWidthPx
         val col2Width = max(labelTextPaint.measureText("tempo"), valueTextPaint.measureText("999m"))
-        // Coluna 3: Compara largura do label "Valor Oferta" com o valor €/Hora (que é maior) + barra
-        val col3Width = max(labelTextPaint.measureText("Valor Oferta"), extraHighlightValueTextPaint.measureText("999.9€")) + indicatorBarMarginPx + indicatorBarWidthPx // €/h + barra
+        val col3Width = max(labelTextPaint.measureText("Valor Oferta"), extraHighlightValueTextPaint.measureText("999.9€")) + indicatorBarMarginPx + indicatorBarWidthPx
 
         val requiredWidth = (paddingPx * 2) + col1Width + textSpacingHorizontalPx + col2Width + textSpacingHorizontalPx + col3Width
 
-        // Calcular altura necessária - Linha de cima agora usa a maior altura entre €/km e €/hora
-        val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight) // <<< USA A MAIOR ALTURA DA LINHA DE CIMA
-        val firstRowHeight = labelHeight + textSpacingVerticalPx + topHighlightHeight // <<< USA topHighlightHeight
+        val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight)
+        val firstRowHeight = labelHeight + textSpacingVerticalPx + topHighlightHeight
         val secondRowHeight = labelHeight + textSpacingVerticalPx + valueHeight
         val requiredHeight = (paddingPx * 2) + firstRowHeight + lineSpacingVerticalPx + secondRowHeight
 
@@ -142,7 +133,7 @@ class OverlayView(context: Context) : View(context) {
         val measuredHeight = resolveSize(requiredHeight.toInt(), heightMeasureSpec)
 
         setMeasuredDimension(measuredWidth, measuredHeight)
-        Log.d(TAG,"onMeasure c/ Fonte €/h Maior - Required: ${requiredWidth.toInt()}x${requiredHeight.toInt()}, Measured: ${measuredWidth}x$measuredHeight")
+        // Log.d(TAG,"onMeasure c/ Fonte €/h Maior - Required: ${requiredWidth.toInt()}x${requiredHeight.toInt()}, Measured: ${measuredWidth}x$measuredHeight") // Menos verboso
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -150,7 +141,6 @@ class OverlayView(context: Context) : View(context) {
         backgroundRect.set(0f,0f,w.toFloat(),h.toFloat())
         val halfBorder = borderPaint.strokeWidth / 2f
         borderRect.set(halfBorder, halfBorder, w - halfBorder, h - halfBorder)
-        // Log.d(TAG,"onSizeChanged: ${w}x$h") // Menos verboso
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -161,7 +151,7 @@ class OverlayView(context: Context) : View(context) {
         drawOfferDetailsWithIndicators(canvas)
     }
 
-    /** Desenha os detalhes da oferta em layout 2x3 com barras indicadoras laterais */
+    /** Desenha os detalhes da oferta em layout 2x3 com barras indicadoras laterais E valores coloridos */
     private fun drawOfferDetailsWithIndicators(canvas: Canvas) {
         updateDimensionsAndPaints()
 
@@ -180,89 +170,99 @@ class OverlayView(context: Context) : View(context) {
         val centerColX = measuredWidth / 2f
         val rightColX = measuredWidth - paddingPx
 
-        // Baselines Y (a linha de cima agora depende da maior altura entre €/km e €/hora)
         val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight)
         val topLabelY = paddingPx + labelHeight - labelTextPaint.descent()
-        val topValueY = topLabelY + topHighlightHeight + textSpacingVerticalPx // Baseline comum para valores da linha de cima
-        // Ajuste individual das baselines de €/km e €/h baseado em suas alturas específicas
+        val topValueY = topLabelY + topHighlightHeight + textSpacingVerticalPx
         val topValueKmBaseline = topValueY - highlightValueTextPaint.descent()
-        val topValueHourBaseline = topValueY - extraHighlightValueTextPaint.descent() // <<< USA ALTURA EXTRA
+        val topValueHourBaseline = topValueY - extraHighlightValueTextPaint.descent()
 
-        // Baselines da linha de baixo
         val bottomLabelY = topValueY + lineSpacingVerticalPx + labelHeight - labelTextPaint.descent()
         val bottomValueY = bottomLabelY + valueHeight + textSpacingVerticalPx - valueTextPaint.descent()
 
-        // Posições X para as barras indicadoras
-        val kmValueTextWidth = highlightValueTextPaint.measureText(euroPerKmStr)
+        // Calcula larguras dos textos para posicionar barras
+        // Define um valor mínimo para evitar que a barra encoste no texto se o valor for muito curto (ex: "0.5")
+        val minTextWidthForBarSpacing = labelTextPaint.measureText("00.00")
+        val kmValueTextWidth = max(highlightValueTextPaint.measureText(euroPerKmStr), minTextWidthForBarSpacing)
         val kmIndicatorLeft = leftColX + kmValueTextWidth + indicatorBarMarginPx
         val kmIndicatorRight = kmIndicatorLeft + indicatorBarWidthPx
 
-        val hourValueTextWidth = extraHighlightValueTextPaint.measureText(euroPerHourStr) // <<< USA PAINT EXTRA
+        val hourValueTextWidth = max(extraHighlightValueTextPaint.measureText(euroPerHourStr), minTextWidthForBarSpacing)
         val hourIndicatorRight = rightColX - hourValueTextWidth - indicatorBarMarginPx
         val hourIndicatorLeft = hourIndicatorRight - indicatorBarWidthPx
 
-        // Posições Y para as barras (alinhadas com os textos correspondentes)
         val kmIndicatorTop = topValueKmBaseline + highlightValueTextPaint.ascent()
         val kmIndicatorBottom = topValueKmBaseline + highlightValueTextPaint.descent()
-        val hourIndicatorTop = topValueHourBaseline + extraHighlightValueTextPaint.ascent() // <<< USA PAINT EXTRA
-        val hourIndicatorBottom = topValueHourBaseline + extraHighlightValueTextPaint.descent() // <<< USA PAINT EXTRA
+        val hourIndicatorTop = topValueHourBaseline + extraHighlightValueTextPaint.ascent()
+        val hourIndicatorBottom = topValueHourBaseline + extraHighlightValueTextPaint.descent()
 
 
-        // --- Desenhar Textos ---
+        // --- Definir Cores e Desenhar Textos ---
 
         // Coluna 1: €/Km e km totais
         labelTextPaint.textAlign = Paint.Align.LEFT
         highlightValueTextPaint.textAlign = Paint.Align.LEFT
         valueTextPaint.textAlign = Paint.Align.LEFT
+        labelTextPaint.color = TEXT_COLOR_LABEL // Garante cor label
         canvas.drawText("€/Km", leftColX, topLabelY, labelTextPaint)
-        canvas.drawText(euroPerKmStr, leftColX, topValueKmBaseline, highlightValueTextPaint) // Usa baseline específica
+        // Define cor do €/KM baseado no rating
+        highlightValueTextPaint.color = getIndicatorColor(kmRating)
+        canvas.drawText(euroPerKmStr, leftColX, topValueKmBaseline, highlightValueTextPaint)
+        labelTextPaint.color = TEXT_COLOR_LABEL // Garante cor label
         canvas.drawText("km totais", leftColX, bottomLabelY, labelTextPaint)
+        valueTextPaint.color = TEXT_COLOR_VALUE // Garante cor padrão
         canvas.drawText(totalKmStr, leftColX, bottomValueY, valueTextPaint)
 
         // Coluna 2: Tempo
         labelTextPaint.textAlign = Paint.Align.CENTER
         valueTextPaint.textAlign = Paint.Align.CENTER
+        labelTextPaint.color = TEXT_COLOR_LABEL // Garante cor label
         canvas.drawText("tempo", centerColX, topLabelY, labelTextPaint)
-        canvas.drawText(totalTimeStr, centerColX, topValueKmBaseline, valueTextPaint) // Usa baseline da linha de cima
+        valueTextPaint.color = TEXT_COLOR_VALUE // Garante cor padrão
+        canvas.drawText(totalTimeStr, centerColX, topValueKmBaseline, valueTextPaint)
 
-        // Coluna 3: €/Hora e Valor Oferta <<< POSIÇÃO CORRIGIDA
+        // Coluna 3: €/Hora e Valor Oferta
         labelTextPaint.textAlign = Paint.Align.RIGHT
-        extraHighlightValueTextPaint.textAlign = Paint.Align.RIGHT // <<< USA PAINT EXTRA
+        extraHighlightValueTextPaint.textAlign = Paint.Align.RIGHT
         valueTextPaint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("€/Hora", rightColX, topLabelY, labelTextPaint) // €/Hora em cima
-        canvas.drawText(euroPerHourStr, rightColX, topValueHourBaseline, extraHighlightValueTextPaint) // Usa baseline e paint específicos
-        canvas.drawText("Valor Oferta", rightColX, bottomLabelY, labelTextPaint) // Valor em baixo
-        canvas.drawText(mainValueStr, rightColX, bottomValueY, valueTextPaint) // Valor em baixo
+        labelTextPaint.color = TEXT_COLOR_LABEL // Garante cor label
+        canvas.drawText("€/Hora", rightColX, topLabelY, labelTextPaint)
+        // Define cor do €/HORA baseado no rating
+        extraHighlightValueTextPaint.color = getIndicatorColor(hourRating)
+        canvas.drawText(euroPerHourStr, rightColX, topValueHourBaseline, extraHighlightValueTextPaint)
+        labelTextPaint.color = TEXT_COLOR_LABEL // Garante cor label
+        canvas.drawText("Valor Oferta", rightColX, bottomLabelY, labelTextPaint)
+        valueTextPaint.color = TEXT_COLOR_VALUE // Garante cor padrão
+        canvas.drawText(mainValueStr, rightColX, bottomValueY, valueTextPaint)
 
         // --- Desenhar Barras Indicadoras ---
 
-        // Barra Indicadora para €/km (Coluna 1, linha de cima)
-        indicatorPaint.color = getIndicatorColor(kmRating)
+        // Barra Indicadora para €/km
+        indicatorPaint.color = getIndicatorColor(kmRating) // Usa a cor já definida
         indicatorRect.set(kmIndicatorLeft, kmIndicatorTop, kmIndicatorRight, kmIndicatorBottom)
         canvas.drawRect(indicatorRect, indicatorPaint)
 
-        // Barra Indicadora para €/hora (Coluna 3, linha de cima) <<< POSIÇÃO CORRIGIDA
-        indicatorPaint.color = getIndicatorColor(hourRating)
-        indicatorRect.set(hourIndicatorLeft, hourIndicatorTop, hourIndicatorRight, hourIndicatorBottom) // Usa top/bottom do €/Hora
+        // Barra Indicadora para €/hora
+        indicatorPaint.color = getIndicatorColor(hourRating) // Usa a cor já definida
+        indicatorRect.set(hourIndicatorLeft, hourIndicatorTop, hourIndicatorRight, hourIndicatorBottom)
         canvas.drawRect(indicatorRect, indicatorPaint)
     }
 
-    // --- Métodos de atualização (inalterados) ---
+    // --- Métodos de atualização ---
     fun updateFontSize(scale: Float) {
-        Log.d(TAG, "Atualizando escala fonte: $scale")
+        // Log.d(TAG, "Atualizando escala fonte: $scale") // Menos verboso
         fontSizeScale = scale.coerceIn(0.5f, 2.0f)
         updateDimensionsAndPaints()
         requestLayout()
         invalidate()
     }
     fun updateAlpha(alphaValue: Float) {
-        Log.d(TAG, "Atualizando alpha: $alphaValue")
+        // Log.d(TAG, "Atualizando alpha: $alphaValue") // Menos verboso
         viewAlpha = alphaValue.coerceIn(0.0f, 1.0f)
         this.alpha = viewAlpha
         invalidate()
     }
     fun updateState(evaluationResult: EvaluationResult?, offerData: OfferData?) {
-        Log.d(TAG, "Atualizando estado: Borda=${evaluationResult?.combinedBorderRating}, Km=${evaluationResult?.kmRating}, Hora=${evaluationResult?.hourRating}")
+        // Log.d(TAG, "Atualizando estado: Borda=${evaluationResult?.combinedBorderRating}, Km=${evaluationResult?.kmRating}, Hora=${evaluationResult?.hourRating}") // Menos verboso
         currentEvaluationResult = evaluationResult
         currentOfferData = offerData
         requestLayout()
@@ -276,6 +276,7 @@ class OverlayView(context: Context) : View(context) {
             BorderRating.GRAY -> BORDER_COLOR_GRAY
         }
     }
+    // Método agora usado para cor das barras E dos valores €/km, €/h
     private fun getIndicatorColor(rating: IndividualRating): Int {
         return when (rating) {
             IndividualRating.GOOD -> INDICATOR_COLOR_GOOD
@@ -286,6 +287,6 @@ class OverlayView(context: Context) : View(context) {
     }
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        Log.d(TAG, "OverlayView detached.")
+        // Log.d(TAG, "OverlayView detached.") // Menos verboso
     }
 }

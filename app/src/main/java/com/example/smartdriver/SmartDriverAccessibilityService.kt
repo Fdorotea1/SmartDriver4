@@ -26,8 +26,8 @@ class SmartDriverAccessibilityService : AccessibilityService() {
 
         // Delays AJUSTADOS
         private const val MIN_CAPTURE_INTERVAL_MS = 500L // Mantido - Intervalo mínimo entre pedidos
-        private const val CAPTURE_DELAY_MS = 300L        // Aumentado - Delay para eventos de interação
-        private const val WINDOW_CHANGE_CAPTURE_DELAY_MS = 250L // Aumentado - Delay para mudanças de janela/conteúdo
+        private const val CAPTURE_DELAY_MS = 400L        // Aumentado - Delay para eventos de interação
+        private const val WINDOW_CHANGE_CAPTURE_DELAY_MS = 350L // Aumentado - Delay para mudanças de janela/conteúdo
     }
 
     private val handler = Handler(Looper.getMainLooper())

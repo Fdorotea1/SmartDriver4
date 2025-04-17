@@ -25,11 +25,12 @@ class ImageAnalysisUtils {
         // Regex para Recolha: Procura por "X min (Y km) de distância" (ignorando case)
         // Captura Grupo 1: minutos (\d+)
         // Captura Grupo 2: km (\d+([.,]\d+)?) - permite decimal opcional com . ou ,
+        // Regex para Recolha: Procura por "X min (Y km)" (ignorando case)
+// Não exige mais " de distância" no final para maior flexibilidade.
         private val PICKUP_TIME_DIST_PATTERN = Pattern.compile(
-            "(\\d+)\\s+min\\s*\\(\\s*(\\d+(?:[.,]\\d+)?)\\s*km\\s*\\)\\s+de\\s+distância",
+            "(\\d+)\\s+min\\s*\\(\\s*(\\d+(?:[.,]\\d+)?)\\s*km\\s*\\)", // <<< SEM O " de distância"
             Pattern.CASE_INSENSITIVE
         )
-
         // Regex para Viagem: Procura por "Viagem de X min (Y km)" (ignorando case)
         // Captura Grupo 1: minutos (\d+)
         // Captura Grupo 2: km (\d+([.,]\d+)?)
