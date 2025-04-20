@@ -25,109 +25,77 @@ data class OfferData(
         // Velocidades médias estimadas (km/h) para cálculos de estimativa
         private const val AVG_PICKUP_SPEED = 20.0  // km/h
         private const val AVG_TRIP_SPEED = 35.0    // km/h
+        private const val MIN_VALID_DISTANCE = 0.05 // Distância mínima em km para ser considerada válida
+        private const val MIN_VALID_DURATION = 1    // Duração mínima em minutos para ser considerada válida
+        private const val MIN_VALID_VALUE = 0.01    // Valor mínimo em € para ser considerado válido
     }
 
-    // --- Métodos de Cálculo ---
+    // --- Métodos de Cálculo COM VALIDAÇÃO ---
 
-    /** Calcula o valor por km usando o campo 'distance' (que deve conter a soma). */
+    /**
+     * Calcula o valor por km. Retorna null se valor ou distância forem inválidos.
+     */
     fun calculateProfitability(): Double? {
         try {
-            // USA DIRETAMENTE O CAMPO 'distance' (que foi calculado na extração)
             val totalDistance = this.distance.replace(",", ".").toDoubleOrNull() ?: 0.0
-            if (totalDistance <= 0.05) {
-                Log.w(TAG, "[PROFIT] Distância total calculada ($totalDistance km) inválida para calcular €/km.")
+            val monetaryValue = value.replace(",", ".").toDoubleOrNull() ?: 0.0
+
+            // *** VALIDAÇÃO ADICIONADA ***
+            if (totalDistance < MIN_VALID_DISTANCE) {
+                Log.w(TAG, "[PROFIT_VALIDATION] Distância total ($totalDistance km) abaixo do mínimo ($MIN_VALID_DISTANCE km). €/km inválido.")
                 return null
             }
-            val monetaryValue = value.replace(",", ".").toDoubleOrNull() ?: return null
-            if (monetaryValue <= 0) {
-                Log.w(TAG, "[PROFIT] Valor monetário ($monetaryValue €) inválido para calcular €/km.")
+            if (monetaryValue < MIN_VALID_VALUE) {
+                Log.w(TAG, "[PROFIT_VALIDATION] Valor monetário ($monetaryValue €) abaixo do mínimo ($MIN_VALID_VALUE €). €/km inválido.")
                 return null
             }
+            // *** FIM VALIDAÇÃO ***
+
             val valuePerKm = monetaryValue / totalDistance
             Log.d(TAG, "[PROFIT] Valor por km calculado: ${String.format(Locale.US,"%.2f",valuePerKm)} (€$monetaryValue / $totalDistance km)")
-            return if (valuePerKm.isFinite()) valuePerKm else null
+            return if (valuePerKm.isFinite()) valuePerKm else null // Retorna null se divisão resultar em Infinito/NaN
         } catch (e: NumberFormatException) { Log.e(TAG, "[PROFIT] Erro NFE ao calcular €/km: ${e.message}"); return null }
         catch (e: Exception) { Log.e(TAG, "[PROFIT] Erro GEN ao calcular €/km: ${e.message}"); return null }
     }
 
     /**
-     * Calcula o valor por hora. Prioriza tempos extraídos, estima tempos parciais
-     * faltantes usando distâncias parciais, e como último recurso, estima o tempo
-     * total a partir da distância total.
+     * Calcula o valor por hora. Retorna null se valor ou tempo total forem inválidos.
+     * Prioriza tempos extraídos, estima tempos parciais faltantes usando distâncias parciais,
+     * e como último recurso, estima o tempo total a partir da distância total.
      */
     fun calculateValuePerHour(): Double? {
         try {
-            val monetaryValue = value.replace(",", ".").toDoubleOrNull() ?: run {
-                Log.w(TAG, "[HOURLY] Valor monetário inválido para cálculo (€/h).")
+            val monetaryValue = value.replace(",", ".").toDoubleOrNull() ?: 0.0
+
+            // *** VALIDAÇÃO ADICIONADA (Valor) ***
+            if (monetaryValue < MIN_VALID_VALUE) {
+                Log.w(TAG, "[HOURLY_VALIDATION] Valor monetário ($monetaryValue €) abaixo do mínimo ($MIN_VALID_VALUE €). €/h inválido.")
                 return null
             }
-            if (monetaryValue <= 0) {
-                Log.w(TAG, "[HOURLY] Valor monetário não positivo ($monetaryValue €) para cálculo (€/h).")
+            // *** FIM VALIDAÇÃO (Valor) ***
+
+            val totalTimeMinutes = calculateTotalTimeMinutesInternal() // Usa método interno para obter tempo
+            var timeSource = lastTimeSource // Obtem a fonte do cálculo interno
+
+            // *** VALIDAÇÃO ADICIONADA (Tempo) ***
+            if (totalTimeMinutes < MIN_VALID_DURATION) {
+                Log.w(TAG, "[HOURLY_VALIDATION] Tempo total final ($totalTimeMinutes min, Fonte: $timeSource) abaixo do mínimo ($MIN_VALID_DURATION min). €/h inválido.")
                 return null
             }
-
-            var totalTimeMinutes = 0
-            var timeSource = "Não Definido"
-
-            // Tenta converter tempos e distâncias parciais extraídos
-            val pDurInt = pickupDuration.toIntOrNull()
-            val tDurInt = tripDuration.toIntOrNull()
-            val pDistDouble = pickupDistance.replace(",", ".").toDoubleOrNull()
-            val tDistDouble = tripDistance.replace(",", ".").toDoubleOrNull()
-
-            // Caso 1: Ambos os tempos (pickup e trip) foram extraídos corretamente e são válidos
-            if (pDurInt != null && pDurInt >= 0 && tDurInt != null && tDurInt >= 0 && (pDurInt > 0 || tDurInt > 0)) {
-                totalTimeMinutes = pDurInt + tDurInt
-                timeSource = "Soma Direta (P:$pDurInt + T:$tDurInt)"
-            }
-            // Caso 2: Apenas tempo da VIAGEM foi extraído, tentar estimar RECOLHA pela DISTÂNCIA de recolha
-            else if (tDurInt != null && tDurInt > 0 && (pDurInt == null || pDurInt < 0) && pDistDouble != null && pDistDouble > 0.0) {
-                val estimatedPickupTime = ((pDistDouble / AVG_PICKUP_SPEED) * 60.0).toInt().coerceAtLeast(1) // Estima e garante min 1 min
-                totalTimeMinutes = estimatedPickupTime + tDurInt
-                timeSource = "Parcial (Est. P:$estimatedPickupTime [Dist:$pDistDouble km] + Lida T:$tDurInt)"
-                Log.d(TAG, "[HOURLY] Tempo recolha não lido/inválido, estimado $estimatedPickupTime min a partir de $pDistDouble km.")
-            }
-            // Caso 3: Apenas tempo da RECOLHA foi extraído, tentar estimar VIAGEM pela DISTÂNCIA de viagem
-            else if (pDurInt != null && pDurInt > 0 && (tDurInt == null || tDurInt < 0) && tDistDouble != null && tDistDouble > 0.0) {
-                val estimatedTripTime = ((tDistDouble / AVG_TRIP_SPEED) * 60.0).toInt().coerceAtLeast(1) // Estima e garante min 1 min
-                totalTimeMinutes = pDurInt + estimatedTripTime
-                timeSource = "Parcial (Lida P:$pDurInt + Est. T:$estimatedTripTime [Dist:$tDistDouble km])"
-                Log.d(TAG, "[HOURLY] Tempo viagem não lido/inválido, estimado $estimatedTripTime min a partir de $tDistDouble km.")
-            }
-            // Caso 4: Nenhum tempo parcial extraído ou combinações inválidas. Tentar estimativa TOTAL pela distância total.
-            else {
-                Log.w(TAG, "[HOURLY] Tempos parciais não lidos ou inválidos (P:$pDurInt, T:$tDurInt). Tentando estimativa total.")
-                totalTimeMinutes = estimateTimeMinutesFromDistance() // Usa a função que já considera distância total
-                if (totalTimeMinutes > 0) {
-                    timeSource = "Estimado Total (baseado na Dist. Total)"
-                } else {
-                    timeSource = "Falha (Tempos e Estimativa Total Inválidos)"
-                }
-            }
-
-            // --- Verificação Final e Cálculo €/h ---
-            if (totalTimeMinutes <= 0) {
-                Log.e(TAG, "[HOURLY] Tempo total final inválido ($totalTimeMinutes min, Fonte: $timeSource). Impossível calcular €/h.")
-                return null // Retorna null se o tempo for zero ou negativo
-            }
+            // *** FIM VALIDAÇÃO (Tempo) ***
 
             Log.d(TAG, "[HOURLY] Usando Tempo Total = $totalTimeMinutes min (Fonte: $timeSource)")
 
             val totalTimeHours = totalTimeMinutes / 60.0
-            // Evitar divisão por zero explícita (embora totalTimeMinutes > 0 já deva prevenir)
-            if (totalTimeHours == 0.0) {
-                Log.e(TAG, "[HOURLY] Tempo total em horas resultou em zero após divisão ($totalTimeMinutes min). Impossível calcular €/h.")
+            if (totalTimeHours == 0.0) { // Segurança adicional
+                Log.e(TAG, "[HOURLY] Tempo total em horas resultou em zero após divisão ($totalTimeMinutes min).")
                 return null
             }
 
             val valuePerHour = monetaryValue / totalTimeHours
             Log.d(TAG, "[HOURLY] Valor por hora calculado: ${String.format(Locale.US,"%.2f",valuePerHour)} (€${String.format(Locale.US,"%.2f",monetaryValue)} / ${String.format(Locale.US,"%.2f",totalTimeHours)} h)")
 
-            // Retorna o valor calculado se for um número finito
-            return if (valuePerHour.isFinite()) valuePerHour else {
-                Log.e(TAG, "[HOURLY] Resultado do cálculo €/h não é um número finito ($valuePerHour).")
-                null
-            }
+            return if (valuePerHour.isFinite()) valuePerHour else null // Retorna null se Infinito/NaN
 
         } catch (e: NumberFormatException) {
             Log.e(TAG, "[HOURLY] Erro NFE ao calcular €/h: ${e.message}", e); return null
@@ -136,114 +104,133 @@ data class OfferData(
         }
     }
 
+    // Variável para guardar a fonte do último cálculo de tempo
+    @kotlin.jvm.Transient // Evita que seja parcelado
+    private var lastTimeSource : String = "Não Definido"
+
+    /** Método INTERNO para calcular o tempo total, guardando a fonte. */
+    private fun calculateTotalTimeMinutesInternal(): Int {
+        var totalTimeMinutes = 0
+        lastTimeSource = "Não Definido" // Reseta a fonte
+
+        // Tenta converter tempos e distâncias parciais extraídos
+        val pDurInt = pickupDuration.toIntOrNull()
+        val tDurInt = tripDuration.toIntOrNull()
+        val pDistDouble = pickupDistance.replace(",", ".").toDoubleOrNull()
+        val tDistDouble = tripDistance.replace(",", ".").toDoubleOrNull()
+
+        // Caso 1: Ambos os tempos extraídos válidos
+        if (pDurInt != null && pDurInt >= 0 && tDurInt != null && tDurInt >= 0 && (pDurInt > 0 || tDurInt > 0)) {
+            totalTimeMinutes = pDurInt + tDurInt
+            lastTimeSource = "Soma Direta (P:$pDurInt + T:$tDurInt)"
+        }
+        // Caso 2: Apenas tempo VIAGEM lido, estimar RECOLHA pela DISTÂNCIA
+        else if (tDurInt != null && tDurInt >= MIN_VALID_DURATION && (pDurInt == null || pDurInt < 0) && pDistDouble != null && pDistDouble >= MIN_VALID_DISTANCE) {
+            val estimatedPickupTime = ((pDistDouble / AVG_PICKUP_SPEED) * 60.0).toInt().coerceAtLeast(MIN_VALID_DURATION)
+            totalTimeMinutes = estimatedPickupTime + tDurInt
+            lastTimeSource = "Parcial (Est. P:$estimatedPickupTime [Dist:$pDistDouble km] + Lida T:$tDurInt)"
+            Log.d(TAG, "[INTERNAL_TIME] Estimando recolha: $estimatedPickupTime min a partir de $pDistDouble km.")
+        }
+        // Caso 3: Apenas tempo RECOLHA lido, estimar VIAGEM pela DISTÂNCIA
+        else if (pDurInt != null && pDurInt >= MIN_VALID_DURATION && (tDurInt == null || tDurInt < 0) && tDistDouble != null && tDistDouble >= MIN_VALID_DISTANCE) {
+            val estimatedTripTime = ((tDistDouble / AVG_TRIP_SPEED) * 60.0).toInt().coerceAtLeast(MIN_VALID_DURATION)
+            totalTimeMinutes = pDurInt + estimatedTripTime
+            lastTimeSource = "Parcial (Lida P:$pDurInt + Est. T:$estimatedTripTime [Dist:$tDistDouble km])"
+            Log.d(TAG, "[INTERNAL_TIME] Estimando viagem: $estimatedTripTime min a partir de $tDistDouble km.")
+        }
+        // Caso 4: Estimar TOTAL pela distância total
+        else {
+            Log.w(TAG, "[INTERNAL_TIME] Tempos parciais inválidos (P:$pDurInt, T:$tDurInt). Tentando estimativa total.")
+            totalTimeMinutes = estimateTimeMinutesFromDistance() // Usa a função que já considera distância total
+            if (totalTimeMinutes >= MIN_VALID_DURATION) {
+                lastTimeSource = "Estimado Total (baseado na Dist. Total)"
+            } else {
+                lastTimeSource = "Falha (Tempos e Estimativa Total Inválidos)"
+            }
+        }
+        return totalTimeMinutes.coerceAtLeast(0) // Garante não negativo
+    }
+
 
     /** Retorna a distância total calculada (campo 'distance') como Double. */
     fun calculateTotalDistance(): Double {
-        // Este método agora simplesmente retorna o valor do campo 'distance'
-        // que foi preenchido em extractOfferData.
-        // Log.d(TAG, "--- Chamando calculateTotalDistance ---") // Log menos verboso
         val totalDist = this.distance.replace(",", ".").toDoubleOrNull() ?: 0.0
-        // Log.d(TAG, "[CALC_DIST] Retornando valor do campo 'distance': $totalDist")
-        // Log.d(TAG, "--- Final calculateTotalDistance: Retornando $totalDist ---")
         return totalDist.coerceAtLeast(0.0) // Garante não negativo
     }
 
     /** Retorna a duração total calculada (campo 'duration') como Int. */
     fun calculateTotalTimeMinutes(): Int {
-        // Este método agora simplesmente retorna o valor do campo 'duration'
-        // que foi preenchido em extractOfferData.
-        // Log.d(TAG, "--- Chamando calculateTotalTimeMinutes ---") // Log menos verboso
-        val totalTime = this.duration.toIntOrNull() ?: 0
-        // Log.d(TAG, "[CALC_TIME] Retornando valor do campo 'duration': $totalTime")
-        // Log.d(TAG, "--- Final calculateTotalTimeMinutes: Retornando $totalTime ---")
-        return totalTime.coerceAtLeast(0) // Garante não negativo
+        // Chama o método interno que também define a 'lastTimeSource'
+        return calculateTotalTimeMinutesInternal()
     }
 
     /** Estima o tempo total em minutos baseado nas distâncias e velocidades médias. */
     private fun estimateTimeMinutesFromDistance(): Int {
         Log.d(TAG, "[ESTIMATE_TIME] Tentando estimar tempo total a partir das distâncias...")
-        // Usa o método que lê o campo 'distance' calculado
         val totalDistance = calculateTotalDistance()
-        if (totalDistance <= 0.0) {
+        if (totalDistance < MIN_VALID_DISTANCE) { // Usa constante
             Log.w(TAG, "[ESTIMATE_TIME] Distância total inválida ($totalDistance), não é possível estimar.")
-            return 0 // Retorna 0 se não há distância
+            return 0
         }
 
-        // Tenta usar as distâncias parciais EXTRAÍDAS
         var pickupDist = pickupDistance.replace(",", ".").toDoubleOrNull() ?: 0.0
         var tripDist = tripDistance.replace(",", ".").toDoubleOrNull() ?: 0.0
         if (pickupDist < 0) pickupDist = 0.0
         if (tripDist < 0) tripDist = 0.0
 
-        // Se não temos distâncias parciais válidas, usa a total dividida heuristicamente
-        if (pickupDist <= 0.0 && tripDist <= 0.0) {
-            Log.d(TAG, "[ESTIMATE_TIME] Distâncias parciais indisponíveis ou inválidas. Dividindo Dist. Total ($totalDistance km) em 30% Recolha / 70% Viagem para estimativa.")
-            pickupDist = totalDistance * 0.30 // Ex: 30% do tempo para buscar
-            tripDist = totalDistance * 0.70   // Ex: 70% do tempo na viagem
-        } else if (pickupDist > 0.0 && tripDist <= 0.0) {
-            // Se só temos pickup, assume que a viagem é zero para este cálculo de estimativa
-            Log.d(TAG, "[ESTIMATE_TIME] Apenas PDist ($pickupDist km) disponível para estimativa. TDist considerada 0.")
+        // Lógica de estimativa mantida...
+        if (pickupDist < MIN_VALID_DISTANCE && tripDist < MIN_VALID_DISTANCE) {
+            Log.d(TAG, "[ESTIMATE_TIME] Distâncias parciais indisponíveis/inválidas. Dividindo Dist. Total ($totalDistance km) em 30% Recolha / 70% Viagem.")
+            pickupDist = totalDistance * 0.30
+            tripDist = totalDistance * 0.70
+        } else if (pickupDist >= MIN_VALID_DISTANCE && tripDist < MIN_VALID_DISTANCE) {
+            Log.d(TAG, "[ESTIMATE_TIME] Apenas PDist ($pickupDist km) disponível. TDist=0.")
             tripDist = 0.0
-        } else if (tripDist > 0.0 && pickupDist <= 0.0) {
-            // Se só temos trip, assume que a recolha é zero para este cálculo de estimativa
-            Log.d(TAG, "[ESTIMATE_TIME] Apenas TDist ($tripDist km) disponível para estimativa. PDist considerada 0.")
+        } else if (tripDist >= MIN_VALID_DISTANCE && pickupDist < MIN_VALID_DISTANCE) {
+            Log.d(TAG, "[ESTIMATE_TIME] Apenas TDist ($tripDist km) disponível. PDist=0.")
             pickupDist = 0.0
         }
-        // Se ambos pDist e tDist > 0, usa os valores extraídos diretamente
 
         Log.d(TAG, "[ESTIMATE_TIME] Usando para estimativa: PDist=$pickupDist km, TDist=$tripDist km")
 
-        // Calcula tempos estimados com base nas velocidades médias
-        val pickupTimeMinutes = if (pickupDist > 0) (pickupDist / AVG_PICKUP_SPEED) * 60.0 else 0.0
-        val tripTimeMinutes = if (tripDist > 0) (tripDist / AVG_TRIP_SPEED) * 60.0 else 0.0
+        val pickupTimeMinutes = if (pickupDist >= MIN_VALID_DISTANCE) (pickupDist / AVG_PICKUP_SPEED) * 60.0 else 0.0
+        val tripTimeMinutes = if (tripDist >= MIN_VALID_DISTANCE) (tripDist / AVG_TRIP_SPEED) * 60.0 else 0.0
 
-        // Soma os tempos estimados e arredonda para inteiro. Garante pelo menos 1 min se houver alguma distância.
+        // Garante pelo menos MIN_VALID_DURATION se houver alguma distância
         val estimatedTotalTime = if(pickupTimeMinutes + tripTimeMinutes > 0) {
-            (pickupTimeMinutes + tripTimeMinutes).toInt().coerceAtLeast(1)
+            (pickupTimeMinutes + tripTimeMinutes).toInt().coerceAtLeast(MIN_VALID_DURATION)
         } else {
-            0 // Retorna 0 se ambos os tempos estimados forem 0
+            0
         }
 
         Log.d(TAG, "[ESTIMATE_TIME] Tempo total estimado final: $estimatedTotalTime min " +
-                "(Recolha: ${pickupTimeMinutes.toInt()} min [${String.format(Locale.US,"%.1f",pickupDist)}km @ ${AVG_PICKUP_SPEED}km/h] + " +
-                "Viagem: ${tripTimeMinutes.toInt()} min [${String.format(Locale.US,"%.1f",tripDist)}km @ ${AVG_TRIP_SPEED}km/h])")
+                "(P: ${pickupTimeMinutes.toInt()} min + T: ${tripTimeMinutes.toInt()} min)")
 
         return estimatedTotalTime
     }
 
 
-    /** Verifica se a oferta tem dados mínimos para ser considerada válida. */
-    fun isValid(): Boolean {
-        val hasValue = try { (value.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0.0 } catch (e: Exception) { false }
+    /** Verifica se a oferta tem dados mínimos para ser considerada válida PARA CÁLCULOS. */
+    fun isValidForCalculations(): Boolean {
+        val hasValidValue = (value.replace(",", ".").toDoubleOrNull() ?: 0.0) >= MIN_VALID_VALUE
+        val hasValidDistance = calculateTotalDistance() >= MIN_VALID_DISTANCE
+        val hasValidTime = calculateTotalTimeMinutesInternal() >= MIN_VALID_DURATION // Usa interno
 
-        // Verifica se temos DURAÇÃO extraída OU podemos ESTIMAR tempo via distâncias parciais/totais.
-        // Verifica se temos DISTÂNCIA extraída/calculada.
-        // Uma oferta sem valor, OU sem distância, OU sem NENHUMA forma de obter tempo (nem extraído nem estimado) não é válida.
-
-        // Recalcula o tempo que seria usado para €/h para verificar se é > 0
-        var timeForHourlyCalc = 0
-        val pDurInt = pickupDuration.toIntOrNull()
-        val tDurInt = tripDuration.toIntOrNull()
-        if (pDurInt != null && pDurInt >= 0 && tDurInt != null && tDurInt >= 0 && (pDurInt > 0 || tDurInt > 0)) { timeForHourlyCalc = pDurInt + tDurInt }
-        else {
-            val pDistDouble = pickupDistance.replace(",", ".").toDoubleOrNull()
-            val tDistDouble = tripDistance.replace(",", ".").toDoubleOrNull()
-            if (tDurInt != null && tDurInt > 0 && pDistDouble != null && pDistDouble > 0.0) { timeForHourlyCalc = ((pDistDouble / AVG_PICKUP_SPEED) * 60.0).toInt().coerceAtLeast(1) + tDurInt }
-            else if (pDurInt != null && pDurInt > 0 && tDistDouble != null && tDistDouble > 0.0) { timeForHourlyCalc = pDurInt + ((tDistDouble / AVG_TRIP_SPEED) * 60.0).toInt().coerceAtLeast(1) }
-            else { timeForHourlyCalc = estimateTimeMinutesFromDistance() }
-        }
-        val hasValidTimeSource = timeForHourlyCalc > 0
-
-        // Verifica se a distância total calculada é válida
-        val hasValidDistance = calculateTotalDistance() > 0.0
-
-        val isValid = hasValue && hasValidTimeSource && hasValidDistance
+        val isValid = hasValidValue && hasValidDistance && hasValidTime
 
         if (!isValid) {
-            Log.w(TAG, "[VALID?] OfferData considerada INVÁLIDA: Valor=$value (Ok: $hasValue), DistTotal=${calculateTotalDistance()} (Ok: $hasValidDistance), TempoP/Calc=${timeForHourlyCalc} (Ok: $hasValidTimeSource)")
-        } else {
-            Log.d(TAG, "[VALID?] OfferData OK: Valor=$value, DistTotal=${calculateTotalDistance()}, TempoP/Calc=${timeForHourlyCalc}")
+            Log.w(TAG, "[VALID_CALC?] OfferData INVÁLIDA para cálculos: Valor OK=$hasValidValue, Dist OK=$hasValidDistance, Tempo OK=$hasValidTime")
         }
         return isValid
+    }
+
+    // Mantém a função isValid original para compatibilidade, se necessário,
+    // mas a validação real agora está nos métodos de cálculo.
+    // Se preferir, pode remover esta ou fazer ela chamar isValidForCalculations().
+    fun isValid(): Boolean {
+        // Poderia simplesmente chamar a outra: return isValidForCalculations()
+        // Ou manter uma lógica mais simples baseada só na presença de valor
+        val hasValue = try { (value.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0.0 } catch (e: Exception) { false }
+        return hasValue // Exemplo: considerar válido se tiver algum valor
     }
 }

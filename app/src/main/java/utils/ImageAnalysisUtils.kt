@@ -18,24 +18,18 @@ class ImageAnalysisUtils {
         private const val TAG = "ImageAnalysisUtils"
 
         // Regex para Valor (€) - Mantida como antes
-        // Procura por: [€ opcional] DDD,DD [€ opcional] OU DDD [€ obrigatório]
         private val MONEY_PATTERN = Pattern.compile("(?:€\\s*?)?(\\d+[,.]\\d{1,2})(?:\\s*€)?|(\\d+)\\s*€")
 
-        // --- NOVAS Regex Específicas para Tempo e Distância ---
-        // Regex para Recolha: Procura por "X min (Y km) de distância" (ignorando case)
-        // Captura Grupo 1: minutos (\d+)
-        // Captura Grupo 2: km (\d+([.,]\d+)?) - permite decimal opcional com . ou ,
+        // --- Regex Originais para Tempo e Distância ---
         // Regex para Recolha: Procura por "X min (Y km)" (ignorando case)
-// Não exige mais " de distância" no final para maior flexibilidade.
+        // Não exige mais " de distância" no final para maior flexibilidade.
         private val PICKUP_TIME_DIST_PATTERN = Pattern.compile(
-            "(\\d+)\\s+min\\s*\\(\\s*(\\d+(?:[.,]\\d+)?)\\s*km\\s*\\)", // <<< SEM O " de distância"
+            "(\\d+)\\s+min\\s*\\(\\s*(\\d+(?:[.,]\\d+)?)\\s*km\\s*\\)", // <<< Regex Original
             Pattern.CASE_INSENSITIVE
         )
         // Regex para Viagem: Procura por "Viagem de X min (Y km)" (ignorando case)
-        // Captura Grupo 1: minutos (\d+)
-        // Captura Grupo 2: km (\d+([.,]\d+)?)
         private val TRIP_TIME_DIST_PATTERN = Pattern.compile(
-            "viagem\\s+de\\s+(\\d+)\\s+min\\s*\\(\\s*(\\d+(?:[.,]\\d+)?)\\s*km\\s*\\)",
+            "viagem\\s+de\\s+(\\d+)\\s+min\\s*\\(\\s*(\\d+(?:[.,]\\d+)?)\\s*km\\s*\\)", // <<< Regex Original
             Pattern.CASE_INSENSITIVE
         )
         // ----------------------------------------------------
@@ -62,7 +56,10 @@ class ImageAnalysisUtils {
 
     /** Analisa o texto extraído para identificar e extrair dados de uma oferta. */
     fun analyzeTextForOffer(extractedText: String): OfferData? {
-        val normalizedText = extractedText.lowercase(Locale.ROOT) // Usar Locale.ROOT para consistência
+        // Limpa NUL Chars que podem vir do OCR
+        val cleanedText = extractedText.replace("\u0000", "")
+
+        val normalizedText = cleanedText.lowercase(Locale.ROOT) // Usar Locale.ROOT para consistência
             .replace("\\s+".toRegex(), " ") // Normaliza espaços múltiplos
             .trim()
 
@@ -108,9 +105,9 @@ class ImageAnalysisUtils {
 
         if (meetsCriteria) {
             Log.i(TAG, ">>> OFERTA POTENCIAL IDENTIFICADA! <<< Iniciando extração detalhada.")
-            // Log do texto completo pode ser útil para debug de falhas de regex
-            // Log.d(TAG, "Texto Completo Identificado:\n$extractedText")
-            return extractOfferData(normalizedText, extractedText) // Chama a nova extração
+            // ATIVAR ESTE LOG SE PRECISAR DEBUGAR O TEXTO QUE CHEGA AQUI
+            Log.v(TAG, "Texto Original (Cleaned) Identificado:\n$cleanedText")
+            return extractOfferData(normalizedText, cleanedText) // Chama a extração com texto limpo
         } else {
             Log.d(TAG, "Critérios de confiança não atingidos (essenciais: $essentialKeywordsFound, suporte: $supportingKeywordsFound, tempo/dist: $hasPotentialTimeDist).")
             return null
@@ -120,7 +117,7 @@ class ImageAnalysisUtils {
     /**
      * Extrai os dados relevantes usando regex específicas e lógica de pontuação para o valor.
      * @param normalizedText Texto normalizado (lowercase, espaços únicos).
-     * @param originalText Texto original para incluir no OfferData (debug).
+     * @param originalText Texto original (limpo de NUL) para incluir no OfferData (debug).
      * @return OfferData preenchido com os dados encontrados.
      */
     private fun extractOfferData(normalizedText: String, originalText: String): OfferData {
@@ -131,7 +128,7 @@ class ImageAnalysisUtils {
         var tripDuration = ""
         var serviceType = ""
 
-        Log.d(TAG, "--- Iniciando Extração Detalhada (Regex Específicas) ---")
+        Log.d(TAG, "--- Iniciando Extração Detalhada (Regex Originais) ---")
 
         // --- Extração de Valor (€) --- (Lógica mantida)
         val moneyMatcher = MONEY_PATTERN.matcher(normalizedText)
@@ -147,34 +144,36 @@ class ImageAnalysisUtils {
             val endSearchIndex = (moneyMatcher.end() + searchRadius).coerceAtMost(normalizedText.length)
             val searchSubstring = normalizedText.substring(startSearchIndex, endSearchIndex)
             if (searchSubstring.contains('€')) { currentScore += 20 }
-            // Log.d(TAG, "[EXTRACT_VAL] Match: '$currentMatchValue' Score: $currentScore (€ Perto: ${searchSubstring.contains('€')}) Sub: '$searchSubstring'") // Log mais detalhado se necessário
-            if (currentScore > highestScore) { highestScore = currentScore; bestMoneyMatch = currentMatchValue; /* Log.d(TAG, "[EXTRACT_VAL] Novo melhor: '$bestMoneyMatch' ($highestScore)") */ }
+            if (currentScore > highestScore) { highestScore = currentScore; bestMoneyMatch = currentMatchValue; }
         }
         value = bestMoneyMatch?.replace(Regex("[^0-9.]"), "") ?: "" // Limpa não-dígitos/ponto
         Log.d(TAG, "[EXTRACT] Valor Final Escolhido: $value (Baseado em: '$bestMoneyMatch', Score: $highestScore)")
 
-        // --- Extração de Tempo e Distância (NOVAS Regex Específicas) ---
+        // --- Extração de Tempo e Distância (Regex Originais) ---
         // Tenta encontrar Recolha
         val pickupMatcher = PICKUP_TIME_DIST_PATTERN.matcher(normalizedText)
         if (pickupMatcher.find()) {
-            pickupDuration = pickupMatcher.group(1) ?: ""
-            pickupDistance = pickupMatcher.group(2)?.replace(",", ".") ?: "" // Grupo 2 é a distância
-            Log.d(TAG, "[EXTRACT] Recolha encontrada: Dur='$pickupDuration', Dist='$pickupDistance'")
+            // <<< USA GRUPOS DA Regex Original >>>
+            pickupDuration = pickupMatcher.group(1) ?: "" // Grupo 1: Minutos
+            pickupDistance = pickupMatcher.group(2)?.replace(",", ".") ?: "" // Grupo 2: Distância
+            Log.d(TAG, "[EXTRACT] Recolha encontrada (Regex Original): Dur='$pickupDuration', Dist='$pickupDistance'")
         } else {
-            Log.w(TAG, "[EXTRACT] Padrão de Recolha NÃO encontrado no texto.")
-            // Poderia logar o texto aqui para análise se falhar frequentemente:
-            // Log.w(TAG, "Texto onde falhou recolha:\n$normalizedText")
+            Log.w(TAG, "[EXTRACT] Padrão de Recolha (Regex Original) NÃO encontrado no texto.")
+            // ATIVAR ESTE LOG PARA VER O TEXTO QUANDO FALHAR
+            // Log.v(TAG, "Texto onde falhou RECOLHA (Original):\n$normalizedText")
         }
 
         // Tenta encontrar Viagem
         val tripMatcher = TRIP_TIME_DIST_PATTERN.matcher(normalizedText)
         if (tripMatcher.find()) {
-            tripDuration = tripMatcher.group(1) ?: ""
-            tripDistance = tripMatcher.group(2)?.replace(",", ".") ?: "" // Grupo 2 é a distância
-            Log.d(TAG, "[EXTRACT] Viagem encontrada: Dur='$tripDuration', Dist='$tripDistance'")
+            // <<< USA GRUPOS DA Regex Original >>>
+            tripDuration = tripMatcher.group(1) ?: "" // Grupo 1: Minutos
+            tripDistance = tripMatcher.group(2)?.replace(",", ".") ?: "" // Grupo 2: Distância
+            Log.d(TAG, "[EXTRACT] Viagem encontrada (Regex Original): Dur='$tripDuration', Dist='$tripDistance'")
         } else {
-            Log.w(TAG, "[EXTRACT] Padrão de Viagem NÃO encontrado no texto.")
-            // Log.w(TAG, "Texto onde falhou viagem:\n$normalizedText")
+            Log.w(TAG, "[EXTRACT] Padrão de Viagem (Regex Original) NÃO encontrado no texto.")
+            // ATIVAR ESTE LOG PARA VER O TEXTO QUANDO FALHAR
+            // Log.v(TAG, "Texto onde falhou VIAGEM (Original):\n$normalizedText")
         }
 
         // --- Cálculo dos Totais (Lógica mantida) ---
@@ -203,10 +202,8 @@ class ImageAnalysisUtils {
         // --- Extração do Tipo de Serviço (Lógica mantida, lista atualizada) ---
         val lowerCaseText = normalizedText // Já está em lowercase
         for (type in SERVICE_TYPES) {
-            // Procura pelo tipo de serviço como palavra completa ou no início/fim de palavras compostas
             val pattern = Pattern.compile("\\b${Pattern.quote(type.lowercase(Locale.ROOT))}\\b|\\b${Pattern.quote(type.lowercase(Locale.ROOT))}[\\s·-]|[\\s·-]${Pattern.quote(type.lowercase(Locale.ROOT))}\\b")
             if (pattern.matcher(lowerCaseText).find()) {
-                // Se encontrar, tenta pegar o nome mais completo da lista original
                 serviceType = SERVICE_TYPES.firstOrNull { it.contains(type, ignoreCase = true) } ?: type
                 Log.d(TAG, "[EXTRACT] Tipo de Serviço encontrado: $serviceType (match por '$type')")
                 break // Para no primeiro tipo encontrado
@@ -226,10 +223,11 @@ class ImageAnalysisUtils {
             pickupDuration = pickupDuration, // Extraído
             tripDuration = tripDuration,     // Extraído
             serviceType = serviceType,
-            rawText = originalText.take(500) // Guarda apenas o início do texto original
+            rawText = originalText.take(500) // Guarda apenas o início do texto original (limpo)
         )
     }
 
+    // --- Funções cropToRegion e getRegionsOfInterest MANTIDAS COMO ESTAVAM ---
     /** Determina a região de interesse (ROI). Tenta ser um pouco mais alto? */
     fun getRegionsOfInterest(screenWidth: Int, screenHeight: Int): List<Rect> {
         // Começa um pouco mais acima (ex: 25% ou 30% da altura) e adiciona margem

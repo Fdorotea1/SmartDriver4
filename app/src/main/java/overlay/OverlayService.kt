@@ -9,9 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
-import android.os.Handler
+// import android.os.Handler // Removido - Não precisamos mais do Handler para auto-hide
 import android.os.IBinder
-import android.os.Looper
+// import android.os.Looper // Removido - Não precisamos mais do Looper para auto-hide
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
@@ -33,17 +33,14 @@ class OverlayService : Service() {
 
         // --- AÇÕES E EXTRAS ---
         const val ACTION_SHOW_OVERLAY = "com.example.smartdriver.overlay.SHOW_OVERLAY"
-        const val ACTION_HIDE_OVERLAY = "com.example.smartdriver.overlay.HIDE_OVERLAY"
+        const val ACTION_HIDE_OVERLAY = "com.example.smartdriver.overlay.HIDE_OVERLAY" // Este comando ainda é usado externamente e pelo duplo toque
         const val ACTION_UPDATE_SETTINGS = "com.example.smartdriver.overlay.UPDATE_SETTINGS"
-        // const val EXTRA_RATING = "rating" // Removido
-        // <<< NOVA CHAVE para o resultado da avaliação >>>
         const val EXTRA_EVALUATION_RESULT = "evaluation_result"
         const val EXTRA_OFFER_DATA = "offer_data"
         const val EXTRA_FONT_SIZE = "font_size"
         const val EXTRA_TRANSPARENCY = "transparency"
 
-        // Tempo para esconder automaticamente o overlay
-        private const val AUTO_HIDE_DELAY_MS = 8000L // 8 segundos
+        // --- REMOVIDO AUTO_HIDE_DELAY_MS ---
 
         // Estado do serviço
         @JvmStatic
@@ -53,8 +50,7 @@ class OverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayView: OverlayView? = null
     private var isOverlayAdded = false
-    private val hideHandler = Handler(Looper.getMainLooper())
-    private val hideRunnable = Runnable { hideOverlay() }
+    // --- REMOVIDO hideHandler e hideRunnable ---
     private lateinit var overlayLayoutParams: WindowManager.LayoutParams
 
     override fun onCreate() {
@@ -67,13 +63,13 @@ class OverlayService : Service() {
         Log.d(TAG, "Serviço iniciado em foreground.")
     }
 
-    // --- Métodos de Notificação ---
+    // --- Métodos de Notificação (inalterados) ---
     private fun createNotification(contentText: String): Notification {
         createNotificationChannel()
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("SmartDriver")
             .setContentText(contentText)
-            .setSmallIcon(R.drawable.ic_stat_name)
+            .setSmallIcon(R.drawable.ic_stat_name) // <<< USA ÍCONE DE NOTIFICAÇÃO (Verifica se tens este icone)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -98,7 +94,6 @@ class OverlayService : Service() {
             }
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
-            // Log.d(TAG,"Canal de Notificação do Overlay criado.") // Menos verboso
         }
     }
     // --- Fim Métodos de Notificação ---
@@ -106,8 +101,9 @@ class OverlayService : Service() {
 
     private fun initializeLayoutParams() {
         val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-        // FLAG_NOT_TOUCHABLE pode ser útil se não quiser interação nenhuma com o overlay
-        // val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        // Mantém FLAG_NOT_FOCUSABLE para não roubar foco da Uber
+        // Mantém FLAG_NOT_TOUCH_MODAL para permitir toques fora do overlay
+        // REMOVE FLAG_NOT_TOUCHABLE (se existisse) para permitir toques no overlay
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
         overlayLayoutParams = WindowManager.LayoutParams(
@@ -117,9 +113,9 @@ class OverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             val density = resources.displayMetrics.density
-            y = (50 * density).toInt() // Posição Y (50dp do topo)
+            y = (50 * density).toInt() // Posição Y (50dp do topo) - Ajustar se necessário
         }
-        Log.d(TAG, "Layout Params inicializados: Type=$overlayType, Flags=$flags")
+        Log.d(TAG, "Layout Params inicializados (Touch Habilitado): Type=$overlayType, Flags=$flags")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -128,27 +124,23 @@ class OverlayService : Service() {
 
         when (intent?.action) {
             ACTION_SHOW_OVERLAY -> {
-                // <<< MUDANÇA: Lê EvaluationResult em vez de OfferRating >>>
                 val evaluationResult: EvaluationResult? = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
                 val offerData: OfferData? = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java)
 
                 if (evaluationResult != null) {
                     Log.d(TAG, "Solicitado mostrar overlay: Borda=${evaluationResult.combinedBorderRating}, Km=${evaluationResult.kmRating}, Hora=${evaluationResult.hourRating}")
-                    // Atualiza notificação com mais detalhes (opcional)
                     updateNotification("Oferta: Borda ${evaluationResult.combinedBorderRating}")
-                    // <<< MUDANÇA: Passa evaluationResult para showOverlay >>>
                     showOverlay(evaluationResult, offerData)
-                    resetHideTimer() // Reinicia timer para esconder automaticamente
+                    // --- REMOVIDA chamada a resetHideTimer() ---
                 } else {
                     Log.e(TAG, "ACTION_SHOW_OVERLAY recebido sem EvaluationResult válido.")
-                    // Considerar esconder o overlay ou mostrar estado de erro
-                    hideOverlay()
+                    hideOverlay() // Esconde se dados forem inválidos
                 }
                 val timeShowEnd = System.currentTimeMillis(); Log.d(TAG, "[TIME] Processamento SHOW demorou ${timeShowEnd - timeCmdStart}ms")
             }
             ACTION_HIDE_OVERLAY -> {
-                Log.d(TAG, "Solicitado esconder overlay")
-                updateNotification("Overlay pronto") // Volta notificação padrão
+                Log.d(TAG, "Solicitado esconder overlay (via Intent ou duplo toque)")
+                updateNotification("Overlay pronto")
                 hideOverlay()
                 val timeHideEnd = System.currentTimeMillis(); Log.d(TAG, "[TIME] Processamento HIDE demorou ${timeHideEnd - timeCmdStart}ms")
             }
@@ -158,18 +150,15 @@ class OverlayService : Service() {
                 val fontSizePercent = intent.getIntExtra(EXTRA_FONT_SIZE, defaultFontSize)
                 val transparencyPercent = intent.getIntExtra(EXTRA_TRANSPARENCY, defaultTransparency)
                 updateOverlayAppearance(fontSizePercent, transparencyPercent)
-                if (isOverlayAdded) { // Só reinicia o timer se o overlay estiver visível
-                    resetHideTimer()
-                }
+                // --- REMOVIDA chamada a resetHideTimer() ---
                 val timeUpdateEnd = System.currentTimeMillis(); Log.d(TAG, "[TIME] Processamento UPDATE demorou ${timeUpdateEnd - timeCmdStart}ms")
             }
             else -> { Log.w(TAG, "Ação desconhecida ou nula recebida: ${intent?.action}") }
         }
-        // START_REDELIVER_INTENT: Se o serviço for morto pelo sistema, tenta reiniciar com o último Intent
         return START_REDELIVER_INTENT
     }
 
-    // Função auxiliar para obter Parcelable de forma compatível com versões do Android
+    // Função auxiliar getParcelableExtraCompat (inalterada)
     private fun <T : Any?> getParcelableExtraCompat(intent: Intent?, key: String, clazz: Class<T>): T? {
         return intent?.let {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -187,48 +176,38 @@ class OverlayService : Service() {
      * @param evaluationResult O resultado da avaliação da oferta.
      * @param offerData Os dados da oferta (pode ser nulo se apenas atualizando aparência).
      */
-    // <<< MUDANÇA: Aceita EvaluationResult >>>
     private fun showOverlay(evaluationResult: EvaluationResult, offerData: OfferData?) {
         val funcStartTime = System.currentTimeMillis()
         if (windowManager == null) { Log.e(TAG, "WindowManager nulo, impossível mostrar overlay."); return }
 
-        // Cria a OverlayView se ainda não existir
         if (overlayView == null) {
             overlayView = OverlayView(this); Log.d(TAG,"[TIME] OverlayView criada.")
-            // Aplica configurações de aparência iniciais
             val initialFontSize = SettingsActivity.getFontSize(this)
             val initialTransparency = SettingsActivity.getTransparency(this)
             Log.d(TAG, "Aplicando configs iniciais na nova view: Fonte=$initialFontSize%, Transp=$initialTransparency%")
             applyAppearanceSettings(initialFontSize, initialTransparency)
         }
 
-        // Atualiza o estado da OverlayView com os novos dados/avaliação
         val timeUpdateStateStart = System.currentTimeMillis()
-        // <<< MUDANÇA: Passa evaluationResult para updateState >>>
         overlayView?.updateState(evaluationResult, offerData)
         val timeUpdateStateEnd = System.currentTimeMillis(); Log.d(TAG,"[TIME] overlayView.updateState demorou ${timeUpdateStateEnd - timeUpdateStateStart}ms")
 
         try {
             val timeAddViewStart = System.currentTimeMillis()
             if (!isOverlayAdded) {
-                // Adiciona a view à janela se ainda não estiver adicionada
                 windowManager?.addView(overlayView, overlayLayoutParams)
                 isOverlayAdded = true
                 Log.i(TAG, "Overlay ADICIONADO à janela.")
             } else {
-                // Atualiza o layout da view existente (pode ser necessário se o tamanho mudar)
                 windowManager?.updateViewLayout(overlayView, overlayLayoutParams)
                 Log.d(TAG, "Overlay já existe, layout ATUALIZADO.")
             }
             val timeAddViewEnd = System.currentTimeMillis(); Log.d(TAG,"[TIME] addView/updateViewLayout demorou ${timeAddViewEnd - timeAddViewStart}ms")
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao adicionar/atualizar overlay view: ${e.message}", e)
-            // Se ocorrer um erro grave (BadToken), marca como não adicionado para tentar de novo na próxima vez
             if (e is WindowManager.BadTokenException || e is IllegalStateException ) {
                 isOverlayAdded = false
                 Log.e(TAG,"Erro crítico ao adicionar/atualizar view, marcado como não adicionada.")
-                // Poderia tentar remover forçadamente se achar necessário
-                // forceRemoveOverlay()
             }
         }
 
@@ -236,47 +215,28 @@ class OverlayService : Service() {
     }
 
 
-    /** Esconde o overlay da tela e cancela o timer de auto-hide. */
+    /** Esconde o overlay da tela. */
+    // --- REMOVIDO cancelamento do timer daqui ---
     private fun hideOverlay() {
-        hideHandler.removeCallbacks(hideRunnable) // Cancela qualquer auto-hide pendente
         if (isOverlayAdded && overlayView != null && windowManager != null) {
             try {
-                windowManager?.removeView(overlayView) // Remove a view da janela
+                windowManager?.removeView(overlayView)
                 isOverlayAdded = false
-                updateNotification("Overlay pronto") // Atualiza notificação
+                updateNotification("Overlay pronto")
                 Log.i(TAG, "Overlay REMOVIDO da janela.")
             } catch (e: IllegalArgumentException) {
                 Log.w(TAG, "Erro ao remover overlay (View já removida?): ${e.message}")
-                isOverlayAdded = false // Garante que o estado está correto
+                isOverlayAdded = false
             } catch (e: Exception) {
                 Log.w(TAG, "Erro genérico ao remover overlay: ${e.message}")
-                isOverlayAdded = false // Garante que o estado está correto
+                isOverlayAdded = false
             }
-        } else {
-            // Log.d(TAG, "hideOverlay chamado mas overlay não estava adicionado.") // Menos verboso
         }
     }
 
-    /** Tenta remover o overlay imediatamente (usar com cautela). */
-    private fun forceRemoveOverlay() {
-        Log.w(TAG,"Forçando remoção do overlay.")
-        hideHandler.removeCallbacks(hideRunnable)
-        isOverlayAdded = false // Assume que será removido
-        if (overlayView != null && windowManager != null) {
-            try {
-                windowManager?.removeViewImmediate(overlayView) // Tentativa mais direta
-                Log.i(TAG,"Overlay removido forçadamente.")
-            } catch (e: Exception) {
-                Log.e(TAG,"Erro na remoção forçada do overlay: ${e.message}")
-            }
-        }
-        overlayView = null // Descarta a view antiga após forçar remoção
-    }
-
-    /** Atualiza a aparência (fonte, transparência) do overlay existente. */
+    /** Atualiza a aparência (fonte, transparência) do overlay existente. (inalterado) */
     private fun updateOverlayAppearance(fontSizePercent: Int, transparencyPercent: Int) {
         applyAppearanceSettings(fontSizePercent, transparencyPercent) // Aplica na instância da view
-        // Se o overlay estiver na tela, atualiza seu layout (pode ser necessário se o tamanho mudar)
         if (isOverlayAdded && overlayView != null && windowManager != null) {
             try {
                 windowManager?.updateViewLayout(overlayView, overlayLayoutParams)
@@ -287,7 +247,7 @@ class OverlayService : Service() {
         }
     }
 
-    /** Aplica as configurações de fonte e transparência na instância da OverlayView. */
+    /** Aplica as configurações de fonte e transparência na instância da OverlayView. (inalterado) */
     private fun applyAppearanceSettings(fontSizePercent: Int, transparencyPercent: Int) {
         overlayView?.let { view ->
             val fontScale = fontSizePercent / 100f
@@ -298,12 +258,7 @@ class OverlayService : Service() {
         } ?: Log.w(TAG, "Tentativa de aplicar aparência mas overlayView é nula.")
     }
 
-    /** Reinicia o timer para esconder o overlay automaticamente. */
-    private fun resetHideTimer() {
-        hideHandler.removeCallbacks(hideRunnable) // Remove o callback antigo
-        hideHandler.postDelayed(hideRunnable, AUTO_HIDE_DELAY_MS) // Agenda o novo
-        Log.d(TAG, "Timer auto-hide reiniciado (${AUTO_HIDE_DELAY_MS}ms).")
-    }
+    // --- REMOVIDO resetHideTimer() ---
 
     override fun onBind(intent: Intent?): IBinder? {
         return null // Serviço não permite binding
@@ -314,10 +269,9 @@ class OverlayService : Service() {
         Log.w(TAG, "Serviço overlay destruído")
         isRunning.set(false)
         hideOverlay() // Garante que o overlay seja removido
-        overlayView = null // Libera referência
-        windowManager = null // Libera referência
-        hideHandler.removeCallbacksAndMessages(null) // Limpa o handler
-        // Remove a notificação persistente
+        overlayView = null
+        windowManager = null
+        // --- REMOVIDO limpeza do handler ---
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(NOTIFICATION_ID)
         Log.d(TAG,"Notificação do OverlayService cancelada.")
