@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/menu_background_shape"
+    android:padding="12dp"
+    android:elevation="8dp"> <!-- Sombra para destacar -->
+
+    <TextView
+        android:id="@+id/menu_item_main"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Tela Principal"
+        android:textColor="@color/black"
+        android:textSize="16sp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:gravity="center_vertical"
+        android:drawablePadding="12dp"
+        android:background="?android:attr/selectableItemBackground"
+        android:drawableStart="@drawable/ic_home" /> <!-- Adicionar icone ic_home -->
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/gray_divider"/>
+
+    <TextView
+        android:id="@+id/menu_item_history"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Histórico"
+        android:textColor="@color/black"
+        android:textSize="16sp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:gravity="center_vertical"
+        android:drawablePadding="12dp"
+        android:background="?android:attr/selectableItemBackground"
+        android:drawableStart="@drawable/ic_history"/> <!-- Adicionar icone ic_history -->
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/gray_divider"/>
+
+    <TextView
+        android:id="@+id/menu_item_shutdown"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Desligar Aplicação"
+        android:textColor="@color/design_default_color_error"
+    android:textSize="16sp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:gravity="center_vertical"
+    android:drawablePadding="12dp"
+    android:background="?android:attr/selectableItemBackground"
+    android:drawableStart="@drawable/ic_shutdown"/>
+
+</LinearLayout>

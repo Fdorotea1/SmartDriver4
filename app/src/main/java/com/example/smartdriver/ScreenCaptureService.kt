@@ -609,7 +609,7 @@ class ScreenCaptureService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("SmartDriver")
             .setContentText(contentText)
-            .setSmallIcon(R.drawable.ic_notification_icon) // <<< USA ÍCONE DE NOTIFICAÇÃO
+            .setSmallIcon(R.drawable.smartdriver) // <<< USA ÍCONE DE NOTIFICAÇÃO
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)

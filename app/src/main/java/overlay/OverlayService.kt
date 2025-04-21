@@ -1,14 +1,15 @@
 package com.example.smartdriver.overlay // <<< VERIFIQUE O PACKAGE
 
-// <<< Imports Essenciais >>>
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service // <<< IMPORT PARA Service
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Resources
+import android.graphics.Color // Import Color
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -16,11 +17,18 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.ImageButton // Import ImageButton
+import android.widget.ImageView.ScaleType // Import ScaleType
 import androidx.core.app.NotificationCompat
 import com.example.smartdriver.R
 import com.example.smartdriver.SettingsActivity
+import com.example.smartdriver.ScreenCaptureService
+import com.example.smartdriver.MediaProjectionData
+import com.example.smartdriver.MainActivity
 import com.example.smartdriver.utils.OfferData
 import com.example.smartdriver.utils.EvaluationResult
 import com.example.smartdriver.utils.IndividualRating
@@ -29,12 +37,10 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 import kotlin.math.max
-// <<< Fim Imports Essenciais >>>
 
-// --- CORREÇÃO DA DECLARAÇÃO DA CLASSE ---
-class OverlayService : Service() { // <<< Adicionado ": Service()"
-// ------------------------------------
+class OverlayService : Service() {
 
     companion object {
         private const val TAG = "OverlayService"
@@ -46,6 +52,9 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
         const val ACTION_UPDATE_SETTINGS = "com.example.smartdriver.overlay.UPDATE_SETTINGS"
         const val ACTION_START_TRACKING = "com.example.smartdriver.overlay.START_TRACKING"
         const val ACTION_STOP_TRACKING = "com.example.smartdriver.overlay.STOP_TRACKING"
+        const val ACTION_SHOW_QUICK_MENU = "com.example.smartdriver.overlay.SHOW_QUICK_MENU"
+        const val ACTION_DISMISS_MENU = "com.example.smartdriver.overlay.DISMISS_MENU"
+        const val ACTION_REQUEST_SHUTDOWN = "com.example.smartdriver.overlay.REQUEST_SHUTDOWN"
         const val EXTRA_EVALUATION_RESULT = "evaluation_result"
         const val EXTRA_OFFER_DATA = "offer_data"
         const val EXTRA_FONT_SIZE = "font_size"
@@ -57,13 +66,24 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
         @JvmStatic val isRunning = AtomicBoolean(false)
     }
 
+    // --- Views e Layouts ---
     private var windowManager: WindowManager? = null
     private var mainOverlayView: OverlayView? = null
     private var trackingOverlayView: TrackingOverlayView? = null
+    private var quickMenuView: MenuView? = null
+    private var floatingIconView: ImageButton? = null // Ícone flutuante
+    private lateinit var floatingIconLayoutParams: WindowManager.LayoutParams
     private lateinit var mainLayoutParams: WindowManager.LayoutParams
     private lateinit var trackingLayoutParams: WindowManager.LayoutParams
+    private lateinit var menuLayoutParams: WindowManager.LayoutParams
+
+    // --- Flags de Estado ---
     private var isMainOverlayAdded = false
     private var isTrackingOverlayAdded = false
+    private var isFloatingIconAdded = false
+    private var isQuickMenuAdded = false
+
+    // --- Estado do Tracking ---
     private var isCurrentlyTracking = false
     private var trackingStartTimeMs: Long = 0L
     private var trackedOfferData: OfferData? = null
@@ -72,28 +92,41 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     private var trackedOfferValue: Double = 0.0
     private val trackingUpdateHandler = Handler(Looper.getMainLooper())
     private lateinit var trackingUpdateRunnable: Runnable
+
+    // --- Configurações ---
     private var goodHourThreshold: Double = 15.0
     private var poorHourThreshold: Double = 8.0
     private val gson = Gson()
     private lateinit var historyPrefs: SharedPreferences
 
-    // --- Métodos do Ciclo de Vida (agora fazem override corretamente) ---
+    // --- Variáveis para Arrastar Ícone ---
+    private var initialIconX: Int = 0
+    private var initialIconY: Int = 0
+    private var initialTouchX: Float = 0f
+    private var initialTouchY: Float = 0f
+    private var touchSlop: Int = 0
+
+    // --- Métodos do Ciclo de Vida e Configuração ---
     override fun onCreate() {
-        super.onCreate() // <<< Chamada a super.onCreate() é importante
+        super.onCreate()
         Log.i(TAG, "Serviço Overlay CRIADO")
         isRunning.set(true)
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager // getSystemService agora funciona
-        historyPrefs = getSharedPreferences(HISTORY_PREFS_NAME, Context.MODE_PRIVATE) // getSharedPreferences agora funciona
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        historyPrefs = getSharedPreferences(HISTORY_PREFS_NAME, Context.MODE_PRIVATE)
+        touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+
         loadTrackingThresholds()
         initializeMainLayoutParams()
         initializeTrackingLayoutParams()
+        initializeMenuLayoutParams()
+        initializeFloatingIconLayoutParams() // Inicializa params do ícone
         setupTrackingRunnable()
-        startForeground(NOTIFICATION_ID, createNotification("Overlay pronto", false)) // startForeground agora funciona
+        startForeground(NOTIFICATION_ID, createNotification("Overlay pronto", false))
+        addFloatingIconOverlay() // Adiciona o ícone ao iniciar
     }
 
     private fun loadTrackingThresholds() {
         try {
-            // Passa 'this' que agora é um Context válido
             goodHourThreshold = SettingsActivity.getGoodHourThreshold(this)
             poorHourThreshold = SettingsActivity.getPoorHourThreshold(this)
             Log.d(TAG, "Limiares €/h tracking: Bom≥$goodHourThreshold, Mau≤$poorHourThreshold")
@@ -104,14 +137,36 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
         val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         mainLayoutParams = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, overlayType, flags, PixelFormat.TRANSLUCENT)
-            .apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (50 * resources.displayMetrics.density).toInt() } // resources agora funciona
+            .apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (50 * resources.displayMetrics.density).toInt() }
     }
 
     private fun initializeTrackingLayoutParams() {
         val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         trackingLayoutParams = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, overlayType, flags, PixelFormat.TRANSLUCENT)
-            .apply { gravity = Gravity.TOP or Gravity.END; x = (10 * resources.displayMetrics.density).toInt(); y = (10 * resources.displayMetrics.density).toInt() } // resources agora funciona
+            .apply { gravity = Gravity.TOP or Gravity.END; x = (10 * resources.displayMetrics.density).toInt(); y = (10 * resources.displayMetrics.density).toInt() }
+    }
+
+    private fun initializeMenuLayoutParams() {
+        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        menuLayoutParams = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, overlayType, flags, PixelFormat.TRANSLUCENT)
+            // Posiciona o menu um pouco acima do ícone flutuante quando este está no topo
+            .apply { gravity = Gravity.TOP or Gravity.START; x = (10 * resources.displayMetrics.density).toInt(); y = (80 * resources.displayMetrics.density).toInt() }
+        // Alternativa: Posicionar perto do canto inferior esquerdo (como antes)
+        // .apply { gravity = Gravity.BOTTOM or Gravity.START; x = (20 * resources.displayMetrics.density).toInt(); y = (80 * resources.displayMetrics.density).toInt() }
+    }
+
+    private fun initializeFloatingIconLayoutParams() {
+        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        val flags = (WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
+        val iconSizeDp = 60 // Tamanho do botão redondo
+        val iconSizePx = (iconSizeDp * resources.displayMetrics.density).toInt()
+        floatingIconLayoutParams = WindowManager.LayoutParams(iconSizePx, iconSizePx, overlayType, flags, PixelFormat.TRANSLUCENT)
+            .apply { gravity = Gravity.TOP or Gravity.START; x = (10 * resources.displayMetrics.density).toInt(); y = (10 * resources.displayMetrics.density).toInt() }
     }
 
     private fun setupTrackingRunnable() {
@@ -142,7 +197,6 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     private fun createNotification(contentText: String, isTracking: Boolean): Notification {
         createNotificationChannel()
         val smallIconResId = try { if (isTracking) R.drawable.ic_stat_tracking else R.mipmap.ic_launcher } catch (e: Resources.NotFoundException) { Log.w(TAG, "Ícone ic_stat_tracking não encontrado, usando fallback."); R.mipmap.ic_launcher }
-        // Passa 'this' que agora é um Context válido
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("SmartDriver").setContentText(contentText).setSmallIcon(smallIconResId)
             .setOngoing(true).setCategory(NotificationCompat.CATEGORY_SERVICE).setPriority(NotificationCompat.PRIORITY_LOW)
@@ -150,7 +204,7 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     }
 
     private fun updateNotification(contentText: String, isTracking: Boolean) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager // getSystemService agora funciona
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         try { nm.notify(NOTIFICATION_ID, createNotification(contentText, isTracking)) }
         catch (e: Exception) { Log.e(TAG, "Erro ao atualizar notificação: ${e.message}") }
     }
@@ -158,12 +212,12 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW).apply { description = "Notificação do Serviço de Overlay"; enableLights(false); enableVibration(false); setShowBadge(false) }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager // getSystemService agora funciona
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             try { nm.createNotificationChannel(channel) } catch (e: Exception) { Log.e(TAG, "Erro criar canal notificação: ${e.message}") }
         }
     }
 
-    // --- Tratamento de Intents (agora faz override corretamente) ---
+    // --- Tratamento de Intents ---
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand: Action=${intent?.action}")
         when (intent?.action) {
@@ -172,9 +226,12 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
             ACTION_START_TRACKING -> handleStartTracking(intent)
             ACTION_STOP_TRACKING -> handleStopTracking()
             ACTION_UPDATE_SETTINGS -> handleUpdateSettings(intent)
+            ACTION_SHOW_QUICK_MENU -> handleShowQuickMenu()
+            ACTION_DISMISS_MENU -> handleDismissMenu()
+            ACTION_REQUEST_SHUTDOWN -> handleShutdownRequest()
             else -> Log.w(TAG, "Ação desconhecida/nula: ${intent?.action}")
         }
-        return START_REDELIVER_INTENT // Constante agora é reconhecida
+        return START_REDELIVER_INTENT
     }
 
     private fun handleShowOverlay(intent: Intent?) {
@@ -188,6 +245,7 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
         Log.d(TAG, "Recebido $ACTION_HIDE_OVERLAY.")
         if (isCurrentlyTracking) { Log.w(TAG, "$ACTION_HIDE_OVERLAY durante tracking. Parando..."); stopTrackingAndSaveToHistory() }
         hideMainOverlay(); updateNotification("Overlay pronto", false)
+        removeQuickMenuOverlay()
     }
 
     private fun handleStartTracking(intent: Intent?) {
@@ -196,6 +254,7 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
             if (!isCurrentlyTracking) {
                 Log.i(TAG, ">>> Iniciando Acompanhamento: ${offerDataToTrack.value}€ <<<")
                 hideMainOverlay()
+                removeQuickMenuOverlay()
                 isCurrentlyTracking = true; trackingStartTimeMs = System.currentTimeMillis()
                 trackedOfferData = offerDataToTrack
                 trackedOfferValue = offerDataToTrack.value.replace(",", ".").toDoubleOrNull() ?: 0.0
@@ -205,7 +264,7 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
                 val initialDist = offerDataToTrack.calculateTotalDistance().takeIf { it > 0 }
                 val initialDur = offerDataToTrack.calculateTotalTimeMinutes().takeIf { it > 0 }
                 val offerValStr = offerDataToTrack.value
-                showTrackingOverlay(trackedInitialVpk, initialDist, initialDur, offerValStr) // Chamada corrigida
+                showTrackingOverlay(trackedInitialVpk, initialDist, initialDur, offerValStr)
                 trackingUpdateHandler.removeCallbacks(trackingUpdateRunnable)
                 trackingUpdateHandler.post(trackingUpdateRunnable)
                 updateNotification("Acompanhando Viagem...", true)
@@ -221,11 +280,31 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     private fun handleUpdateSettings(intent: Intent?) {
         Log.d(TAG, "Recebido $ACTION_UPDATE_SETTINGS.")
         loadTrackingThresholds()
-        // Passa 'this' (Context) para getFontSize/Transparency
         val defaultFontSize = SettingsActivity.getFontSize(this); val defaultTransparency = SettingsActivity.getTransparency(this)
         val fontSizePercent = intent?.getIntExtra(EXTRA_FONT_SIZE, defaultFontSize) ?: defaultFontSize
         val transparencyPercent = intent?.getIntExtra(EXTRA_TRANSPARENCY, defaultTransparency) ?: defaultTransparency
         applyAppearanceSettings(fontSizePercent, transparencyPercent); updateLayouts()
+    }
+
+    private fun handleShowQuickMenu() { Log.d(TAG, "Recebido $ACTION_SHOW_QUICK_MENU"); addQuickMenuOverlay() }
+    private fun handleDismissMenu() { Log.d(TAG, "Recebido $ACTION_DISMISS_MENU"); removeQuickMenuOverlay() }
+
+    private fun handleShutdownRequest() {
+        Log.w(TAG, "Recebido $ACTION_REQUEST_SHUTDOWN! Desligando...")
+        removeQuickMenuOverlay()
+        stopTrackingAndSaveToHistory()
+        hideMainOverlay()
+        removeFloatingIconOverlay() // Remove o ícone também
+
+        try { stopService(Intent(this, ScreenCaptureService::class.java)) }
+        catch (e: Exception) { Log.e(TAG, "Erro ao parar ScreenCaptureService: ${e.message}") }
+        MediaProjectionData.clear()
+
+        val shutdownIntent = Intent(MainActivity.ACTION_SHUTDOWN_APP)
+        try { sendBroadcast(shutdownIntent); Log.d(TAG, "Broadcast $shutdownIntent enviado.") }
+        catch (e: Exception) { Log.e(TAG, "Erro ao enviar broadcast de shutdown: ${e.message}") }
+
+        stopSelf()
     }
 
     private fun <T : Any> getParcelableExtraCompat(intent: Intent?, key: String, clazz: Class<T>): T? {
@@ -234,7 +313,7 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
 
     // --- Gestão das Views Overlay ---
     private fun showMainOverlay(evaluationResult: EvaluationResult, offerData: OfferData) {
-        if (windowManager == null) return; if (mainOverlayView == null) { mainOverlayView = OverlayView(this); applyAppearanceSettingsToView(mainOverlayView) } // Passa 'this' (Context)
+        if (windowManager == null) return; if (mainOverlayView == null) { mainOverlayView = OverlayView(this); applyAppearanceSettingsToView(mainOverlayView) }
         mainOverlayView?.updateState(evaluationResult, offerData)
         try {
             if (!isMainOverlayAdded && mainOverlayView != null) { windowManager?.addView(mainOverlayView, mainLayoutParams); isMainOverlayAdded = true; Log.d(TAG, "Overlay Principal ADD.") }
@@ -251,7 +330,7 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     }
 
     private fun showTrackingOverlay(initialVpk: Double?, initialDistance: Double?, initialDuration: Int?, offerVal: String?) {
-        if (windowManager == null) return; if (trackingOverlayView == null) { trackingOverlayView = TrackingOverlayView(this); applyAppearanceSettingsToView(trackingOverlayView) } // Passa 'this' (Context)
+        if (windowManager == null) return; if (trackingOverlayView == null) { trackingOverlayView = TrackingOverlayView(this); applyAppearanceSettingsToView(trackingOverlayView) }
         trackingOverlayView?.updateInitialData(initialVpk, initialDistance, initialDuration, offerVal)
         try {
             if (!isTrackingOverlayAdded && trackingOverlayView != null) { windowManager?.addView(trackingOverlayView, trackingLayoutParams); isTrackingOverlayAdded = true; Log.i(TAG, "Overlay Acompanhamento ADD.") }
@@ -266,6 +345,106 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
             Log.i(TAG, "Overlay Acompanhamento REM.")
         }
     }
+
+    // --- Gestão Ícone Flutuante e Menu ---
+    @SuppressLint("ClickableViewAccessibility")
+    private fun addFloatingIconOverlay() {
+        if (windowManager == null || isFloatingIconAdded) return
+        if (floatingIconView == null) {
+            floatingIconView = ImageButton(this).apply {
+                setImageResource(R.drawable.smartdriver) // <<< USA A SUA IMAGEM
+                setBackgroundResource(R.drawable.fab_background) // <<< APLICA O FUNDO REDONDO
+                scaleType = ScaleType.CENTER_INSIDE // <<< AJUSTA A IMAGEM DENTRO DO FUNDO
+                // Não precisa de padding extra se o fundo e a imagem já têm o tamanho certo
+                setOnTouchListener(createFloatingIconTouchListener())
+            }
+        }
+        try {
+            windowManager?.addView(floatingIconView, floatingIconLayoutParams)
+            isFloatingIconAdded = true
+            Log.i(TAG, "Floating Icon Overlay (Redondo) ADICIONADO.")
+        } catch (e: Exception) { Log.e(TAG, "Erro ao adicionar Floating Icon: ${e.message}"); isFloatingIconAdded = false; floatingIconView = null }
+    }
+
+    private fun removeFloatingIconOverlay() {
+        if (isFloatingIconAdded && floatingIconView != null && windowManager != null) {
+            try { windowManager?.removeView(floatingIconView) }
+            catch (e: Exception) { Log.w(TAG, "Erro ao remover Floating Icon: ${e.message}") }
+            finally { isFloatingIconAdded = false; floatingIconView = null; Log.i(TAG, "Floating Icon Overlay REMOVIDO.") }
+        }
+    }
+
+    private fun addQuickMenuOverlay() {
+        if (windowManager == null || isQuickMenuAdded) return; if (quickMenuView == null) { quickMenuView = MenuView(this) }
+        try { windowManager?.addView(quickMenuView, menuLayoutParams); isQuickMenuAdded = true; Log.i(TAG, "Quick Menu ADD.") }
+        catch (e: Exception) { Log.e(TAG, "Erro add Quick Menu: ${e.message}"); isQuickMenuAdded = false; quickMenuView = null }
+    }
+
+    private fun removeQuickMenuOverlay() {
+        if (isQuickMenuAdded && quickMenuView != null && windowManager != null) {
+            try { windowManager?.removeView(quickMenuView) } catch (e: Exception) { Log.w(TAG, "Erro remove Quick Menu: ${e.message}") }
+            finally { isQuickMenuAdded = false; quickMenuView = null; Log.i(TAG, "Quick Menu REM.") }
+        }
+    }
+
+    // --- OnTouchListener para Ícone Flutuante (Arrastar X/Y e Toggle Menu) ---
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createFloatingIconTouchListener(): View.OnTouchListener {
+        var startTime: Long = 0 // Guarda o tempo do ACTION_DOWN
+
+        return View.OnTouchListener { view, event ->
+            val currentX = event.rawX
+            val currentY = event.rawY
+            val action = event.action
+
+            when (action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startTime = System.currentTimeMillis()
+                    initialIconX = floatingIconLayoutParams.x
+                    initialIconY = floatingIconLayoutParams.y
+                    initialTouchX = currentX
+                    initialTouchY = currentY
+                    Log.v(TAG, "ICON ACTION_DOWN: initialWinX=$initialIconX, initialWinY=$initialIconY, initialTouchX=${initialTouchX.toInt()}, initialTouchY=${initialTouchY.toInt()}")
+                    return@OnTouchListener true // Consome DOWN
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val deltaX = currentX - initialTouchX
+                    val deltaY = currentY - initialTouchY
+                    // Atualiza X e Y da janela
+                    floatingIconLayoutParams.x = initialIconX + deltaX.toInt()
+                    floatingIconLayoutParams.y = initialIconY + deltaY.toInt()
+
+                    // Opcional: Limitar movimento às bordas da tela (requer obter tamanho da tela)
+
+                    try { if (isFloatingIconAdded && floatingIconView != null) { windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams) } }
+                    catch (e: Exception) { Log.e(TAG, "Erro update layout ícone MOVE: ${e.message}") }
+                    return@OnTouchListener true // Consome MOVE
+                }
+                MotionEvent.ACTION_UP -> {
+                    val endTime = System.currentTimeMillis()
+                    val duration = endTime - startTime
+                    val deltaX = currentX - initialTouchX
+                    val deltaY = currentY - initialTouchY
+                    // Verifica se foi clique (pouco movimento E pouco tempo)
+                    val isClick = abs(deltaX) < touchSlop && abs(deltaY) < touchSlop && duration < ViewConfiguration.getTapTimeout()
+
+                    if (isClick) {
+                        Log.d(TAG, "ICON ACTION_UP (CLIQUE, Duração: ${duration}ms)")
+                        // Toggle Menu
+                        if (!isQuickMenuAdded) { handleShowQuickMenu() }
+                        else { handleDismissMenu() }
+                        view.performClick()
+                    } else {
+                        Log.d(TAG, "ICON ACTION_UP (ARRASTO, Duração: ${duration}ms, dX: ${deltaX.toInt()}, dY: ${deltaY.toInt()})")
+                    }
+                    return@OnTouchListener true // Consome UP
+                }
+            }
+            return@OnTouchListener false
+        }
+    }
+    // --------------------------------------------------------------------
+
 
     // --- Funções de Tracking e Salvamento ---
     private fun stopTrackingTimer() { Log.d(TAG, "Parando timer tracking..."); trackingUpdateHandler.removeCallbacks(trackingUpdateRunnable) }
@@ -309,18 +488,20 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     // --- Gestão Aparência ---
     private fun applyAppearanceSettings(fontSizePercent: Int, transparencyPercent: Int) {
         applyAppearanceSettingsToView(mainOverlayView, fontSizePercent, transparencyPercent)
-        applyAppearanceSettingsToView(trackingOverlayView, fontSizePercent, transparencyPercent)
+        applyAppearanceSettingsToView(trackingOverlayView, null, transparencyPercent)
     }
 
     private fun applyAppearanceSettingsToView(view: View?, fontSizePercent: Int? = null, transparencyPercent: Int? = null) {
         view ?: return
-        // Passa 'this' (Context) para getFontSize/Transparency
-        val actualFontSize = fontSizePercent ?: SettingsActivity.getFontSize(this)
         val actualTransparency = transparencyPercent ?: SettingsActivity.getTransparency(this)
-        val fontScale = actualFontSize / 100f
         val alpha = (1.0f - (actualTransparency / 100f)).coerceIn(0.0f, 1.0f)
         when (view) {
-            is OverlayView -> { view.updateFontSize(fontScale); view.updateAlpha(alpha) }
+            is OverlayView -> {
+                val actualFontSize = fontSizePercent ?: SettingsActivity.getFontSize(this)
+                val fontScale = actualFontSize / 100f
+                view.updateFontSize(fontScale)
+                view.updateAlpha(alpha)
+            }
             is TrackingOverlayView -> { view.alpha = alpha }
         }
     }
@@ -328,24 +509,20 @@ class OverlayService : Service() { // <<< Adicionado ": Service()"
     private fun updateLayouts() {
         if (isMainOverlayAdded && mainOverlayView != null && windowManager != null) { try { windowManager?.updateViewLayout(mainOverlayView, mainLayoutParams) } catch (e: Exception) { Log.e(TAG,"Erro upd layout principal: ${e.message}") } }
         if (isTrackingOverlayAdded && trackingOverlayView != null && windowManager != null) { try { windowManager?.updateViewLayout(trackingOverlayView, trackingLayoutParams) } catch (e: Exception) { Log.e(TAG,"Erro upd layout acompanhamento: ${e.message}") } }
+        if (isFloatingIconAdded && floatingIconView != null && windowManager != null) { try { windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams) } catch (e: Exception) { Log.e(TAG,"Erro upd layout ícone: ${e.message}") } }
+        if (isQuickMenuAdded && quickMenuView != null && windowManager != null) { try { windowManager?.updateViewLayout(quickMenuView, menuLayoutParams) } catch (e: Exception) { Log.e(TAG,"Erro upd layout menu: ${e.message}") } }
     }
 
-    // --- onBind e onDestroy (agora fazem override corretamente) ---
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    // --- onBind e onDestroy ---
+    override fun onBind(intent: Intent?): IBinder? { return null }
 
     override fun onDestroy() {
-        super.onDestroy() // <<< Chamada a super.onDestroy()
+        super.onDestroy()
         Log.w(TAG, "Serviço Overlay DESTRUÍDO")
         isRunning.set(false); stopTrackingTimer()
-        hideMainOverlay(); hideTrackingOverlay()
-        mainOverlayView = null; trackingOverlayView = null; windowManager = null
-        try {
-            // getSystemService agora funciona
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(NOTIFICATION_ID); Log.d(TAG,"Notificação cancelada.")
-        }
+        hideMainOverlay(); hideTrackingOverlay(); removeQuickMenuOverlay(); removeFloatingIconOverlay() // Remove tudo
+        mainOverlayView = null; trackingOverlayView = null; windowManager = null; quickMenuView = null; floatingIconView = null
+        try { val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager; nm.cancel(NOTIFICATION_ID); Log.d(TAG,"Notificação cancelada.") }
         catch (e: Exception){ Log.e(TAG, "Erro cancel notification onDestroy: ${e.message}") }
     }
 }
