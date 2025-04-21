@@ -3,24 +3,18 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.smartdriver">
 
-    <!-- Permissões Necessárias -->
+    <!-- Permissões Essenciais -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <!-- Necessária para notificações em Android 13+ (Tiramisu) -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Necessária para Media Projection (captura de tela) como serviço em primeiro plano -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" /> <!-- Overlay -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" /> <!-- Notificações (Android 13+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
-        tools:ignore="SystemPermissionTypo" />
-    <!-- Permissões de Armazenamento (Exemplo - Ajustar conforme necessidade real) -->
-    <!-- Para salvar imagens em versões antigas -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <!-- Para ler imagens em Android 13+ (se necessário para algo além de salvar) -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-    <!-- Para salvar imagens em versões MUITO antigas (API <= 28) -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
+        android:minSdkVersion="29" tools:ignore="SystemPermissionTypo" /> <!-- Captura de Tela -->
 
+    <!-- Permissões de Armazenamento (Opcional/Legado) -->
+    <!-- Para salvar em Pictures/ no Android 10+ não precisa -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" android:minSdkVersion="33"/>
 
     <application
         android:allowBackup="true"
@@ -33,7 +27,7 @@
         android:theme="@style/Theme.SmartDriver"
         tools:targetApi="31">
 
-        <!-- Atividade Splash como LAUNCHER -->
+        <!-- Atividade Splash (Entrada da App) -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
@@ -44,11 +38,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Atividade Principal (NÃO é mais LAUNCHER) -->
+        <!-- Atividade Principal -->
         <activity
             android:name=".MainActivity"
-            android:exported="false">
-        </activity>
+            android:exported="false"
+            android:launchMode="singleTop"/>
 
         <!-- Atividade de Configurações -->
         <activity
@@ -56,38 +50,40 @@
             android:exported="false"
             android:label="@string/title_activity_settings"
             android:parentActivityName=".MainActivity">
-            <meta-data
-                android:name="android.support.PARENT_ACTIVITY"
-                android:value=".MainActivity" />
+            <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity" />
+        </activity>
+
+        <!-- DECLARAÇÃO DA ATIVIDADE DE HISTÓRICO -->
+        <activity
+            android:name=".HistoryActivity"
+            android:exported="false"
+            android:label="Histórico"
+            android:parentActivityName=".MainActivity">
+            <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity" />
         </activity>
 
         <!-- Serviços -->
         <service
             android:name=".SmartDriverAccessibilityService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false"
             android:label="SmartDriver Service"
-            android:exported="false">
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
-            <!-- Aponta para o arquivo de configuração do serviço -->
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />
         </service>
-
         <service
             android:name=".ScreenCaptureService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection"
-            />
-
+            android:foregroundServiceType="mediaProjection" />
         <service
             android:name=".overlay.OverlayService"
             android:enabled="true"
-            android:exported="false"
-            />
+            android:exported="false" />
+        <!-- android:foregroundServiceType="specialUse" REMOVIDO -->
+        <!-- tools:targetApi="UPSIDE_DOWN_CAKE" REMOVIDO -->
 
     </application>
 

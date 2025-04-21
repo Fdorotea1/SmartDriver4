@@ -27,7 +27,7 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <!-- Status App e Switch Principal -->
+        <!-- Status App ON/OFF -->
         <LinearLayout
             android:id="@+id/appStatusContainer"
             android:layout_width="match_parent"
@@ -56,7 +56,6 @@
                 app:trackTint="@color/switch_track_selector"/>
         </LinearLayout>
 
-        <!-- Divisor -->
         <View
             android:id="@+id/divider_status"
             android:layout_width="match_parent"
@@ -87,7 +86,6 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/instructionsHeaderTextView" />
 
-        <!-- Divisor -->
         <View
             android:id="@+id/divider_instructions"
             android:layout_width="match_parent"
@@ -96,7 +94,7 @@
             android:background="@color/gray_divider"
             app:layout_constraintTop_toBottomOf="@+id/instructionsTextView" />
 
-        <!-- Título Permissões -->
+        <!-- Permissões -->
         <TextView
             android:id="@+id/permissionsTitleTextView"
             android:layout_width="wrap_content"
@@ -109,7 +107,7 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/divider_instructions" />
 
-        <!-- Permissão 1: Acessibilidade -->
+        <!-- Acessibilidade -->
         <TextView
             android:id="@+id/accessibilityStatusTextView"
             android:layout_width="0dp"
@@ -132,7 +130,7 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/permissionsTitleTextView" />
 
-        <!-- Permissão 2: Overlay -->
+        <!-- Overlay -->
         <TextView
             android:id="@+id/overlayStatusTextView"
             android:layout_width="0dp"
@@ -155,7 +153,7 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/accessibilityButton" />
 
-        <!-- Permissão 3: Captura (APENAS TEXTO) -->
+        <!-- Captura -->
         <TextView
             android:id="@+id/captureStatusTextView"
             android:layout_width="0dp"
@@ -167,9 +165,7 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/overlayButton" />
-        <!-- O /> está aqui, fechando a tag TextView corretamente -->
 
-        <!-- Divisor Permissões -->
         <View
             android:id="@+id/divider_permissions"
             android:layout_width="match_parent"
@@ -177,9 +173,8 @@
             android:layout_marginTop="16dp"
             android:background="@color/gray_divider"
             app:layout_constraintTop_toBottomOf="@+id/captureStatusTextView" />
-        <!-- Constraint top aponta para o TextView acima (captureStatusTextView) -->
 
-        <!-- Botão Configurações -->
+        <!-- Botões de Ação -->
         <Button
             android:id="@+id/settingsButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -190,6 +185,20 @@
             android:textColor="@color/black"
             app:strokeColor="@color/black"
             app:layout_constraintTop_toBottomOf="@+id/divider_permissions"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <!-- BOTÃO HISTÓRICO -->
+        <Button
+            android:id="@+id/historyButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="VER HISTÓRICO"
+            android:textColor="@color/black"
+            app:strokeColor="@color/black"
+            app:layout_constraintTop_toBottomOf="@+id/settingsButton"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"/>
 
@@ -204,7 +213,7 @@
             android:checked="false"
             app:thumbTint="@color/switch_thumb_selector"
             app:trackTint="@color/switch_track_selector"
-            app:layout_constraintTop_toBottomOf="@+id/settingsButton" />
+            app:layout_constraintTop_toBottomOf="@+id/historyButton" /> <!-- Abaixo do botão histórico -->
 
         <!-- Botão Shutdown -->
         <Button
@@ -220,7 +229,7 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintVertical_bias="0.0" />
+            app:layout_constraintVertical_bias="0.0" /> <!-- Para não colar no fundo se houver espaço -->
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 </ScrollView>
