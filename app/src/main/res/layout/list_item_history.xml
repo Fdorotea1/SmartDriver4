@@ -1,103 +1,97 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
     android:paddingTop="10dp"
     android:paddingBottom="10dp"
-    android:paddingStart="16dp"
     android:paddingEnd="16dp"
-    android:layout_marginBottom="6dp"
-    android:background="?android:attr/selectableItemBackground" > <!-- Efeito visual ao clicar -->
+    android:paddingStart="0dp"> <!-- Padding Start zerado -->
 
-    <!-- Linha 1: Início e Duração -->
-    <LinearLayout
-        android:layout_width="match_parent"
+    <!-- Barra Indicadora Lateral -->
+    <View
+        android:id="@+id/view_rating_indicator"
+        android:layout_width="6dp"
+        android:layout_height="0dp"
+        android:background="@color/history_indicator_unknown"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Content Views (Alinhados à Direita da Barra) -->
+    <TextView
+        android:id="@+id/textViewStartTime"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="4dp">
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="8dp"
+        android:textAppearance="?attr/textAppearanceListItemSmall"
+        android:textColor="?android:attr/textColorSecondary"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/view_rating_indicator"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:text="Início: 26/04 10:30" />
 
-        <TextView
-            android:id="@+id/textViewStartTime"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Início: DD/MM HH:MM"
-            android:textSize="13sp"
-            android:textColor="@color/gray_inactive"/>
-
-        <TextView
-            android:id="@+id/textViewDuration"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Duração: XXm XXs"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:textColor="@color/black"/>
-    </LinearLayout>
-
-    <!-- Linha 2: Valor, €/h Real, €/km Inicial -->
-    <LinearLayout
-        android:layout_width="match_parent"
+    <TextView
+        android:id="@+id/textViewDuration"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="4dp"
-        android:gravity="center_vertical">
+        android:layout_marginTop="4dp"
+        android:textAppearance="?attr/textAppearanceListItem"
+        app:layout_constraintStart_toStartOf="@+id/textViewStartTime"
+        app:layout_constraintTop_toBottomOf="@+id/textViewStartTime"
+        tools:text="Duração: 15m 30s" />
 
-        <TextView
-            android:id="@+id/textViewOfferValue"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="70dp"
-            android:text="Valor: -- €"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:textColor="@color/black"/>
-
-        <TextView
-            android:id="@+id/textViewFinalVph"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center_horizontal"
-            android:text="€/h Real: --"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:textColor="@color/black"/>
-
-        <TextView
-            android:id="@+id/textViewInitialVpk"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minWidth="70dp"
-            android:gravity="end"
-            android:text="€/km Ini: --"
-            android:textSize="14sp"
-            android:textColor="@color/black"/>
-
-    </LinearLayout>
-
-    <!-- Linha 3: Distância Inicial e Tipo Serviço -->
-    <LinearLayout
-        android:layout_width="match_parent"
+    <TextView
+        android:id="@+id/textViewOfferValue"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
-        <TextView
-            android:id="@+id/textViewInitialDistance"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Dist Ini: -- km"
-            android:textSize="12sp"
-            android:textColor="@color/gray_inactive"/>
-        <TextView
-            android:id="@+id/textViewServiceType"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:gravity="end"
-            android:text="-"
-            android:textSize="12sp"
-            android:textColor="@color/gray_inactive"/>
-    </LinearLayout>
+        android:layout_marginStart="16dp"
+        android:textAppearance="?attr/textAppearanceListItem"
+        android:textStyle="bold"
+        app:layout_constraintBaseline_toBaselineOf="@+id/textViewDuration"
+        app:layout_constraintStart_toEndOf="@+id/textViewDuration"
+        tools:text="Valor: 10.50 €" />
 
-</LinearLayout>
+    <TextView
+        android:id="@+id/textViewFinalVph"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textAppearance="?attr/textAppearanceListItemSecondary"
+        app:layout_constraintStart_toStartOf="@+id/textViewDuration"
+        app:layout_constraintTop_toBottomOf="@+id/textViewDuration"
+        tools:text="€/h Real: 18.5" />
+
+    <TextView
+        android:id="@+id/textViewInitialVpk"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:textAppearance="?attr/textAppearanceListItemSecondary"
+        app:layout_constraintBaseline_toBaselineOf="@+id/textViewFinalVph"
+        app:layout_constraintStart_toEndOf="@+id/textViewFinalVph"
+        tools:text="€/km Ini: 1.20" />
+
+    <TextView
+        android:id="@+id/textViewInitialDistance"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textAppearance="?attr/textAppearanceListItemSecondary"
+        app:layout_constraintStart_toStartOf="@+id/textViewFinalVph"
+        app:layout_constraintTop_toBottomOf="@+id/textViewFinalVph"
+        tools:text="Dist Ini: 8.5 km" />
+
+    <TextView
+        android:id="@+id/textViewServiceType"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:textAppearance="?attr/textAppearanceListItemSecondary"
+        app:layout_constraintBaseline_toBaselineOf="@+id/textViewInitialDistance"
+        app:layout_constraintStart_toEndOf="@+id/textViewInitialDistance"
+        tools:text="UberX" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

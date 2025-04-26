@@ -1,16 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Cores básicas da App -->
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
-    <color name="gray_inactive">#FF757575</color> <!-- Cinza para texto/elementos inativos -->
-    <color name="gray_divider">#FFCCCCCC</color> <!-- Cinza claro para divisórias -->
-
-    <!-- Cores do tema padrão (Podem ser ajustadas depois se quiser mudar botões, etc.) -->
-    <!-- Mantendo as cores padrão geradas pelo Android Studio para simplicidade -->
+    <!-- Cores Base (Exemplos, mantenha as suas) -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
     <color name="teal_200">#FF03DAC5</color>
     <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="gray_inactive">#888888</color>
+    <color name="splash_background">#FFFFFF</color> <!-- Exemplo -->
+
+    <!-- Cores da Avaliação (Exemplos, ajuste se necessário) -->
+    <color name="rating_good">#4CAF50</color> <!-- Verde -->
+    <color name="rating_medium">#FFC107</color> <!-- Amarelo/Laranja -->
+    <color name="rating_poor">#F44336</color> <!-- Vermelho -->
+    <color name="rating_unknown">#9E9E9E</color> <!-- Cinza -->
+    <color name="gray_divider">#BDBDBD</color> <!-- Cinza médio, ajuste o HEX se desejar -->
+    <!-- *** NOVAS CORES PARA INDICADOR DO HISTÓRICO *** -->
+    <color name="history_indicator_good">#A5D6A7</color> <!-- Verde claro -->
+    <color name="history_indicator_medium">#FFF59D</color> <!-- Amarelo claro -->
+    <color name="history_indicator_poor">#EF9A9A</color> <!-- Vermelho claro -->
+    <color name="history_indicator_unknown">#E0E0E0</color> <!-- Cinza claro -->
+
 </resources>

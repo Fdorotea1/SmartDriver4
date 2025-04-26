@@ -6,9 +6,11 @@ import android.content.Intent
 import android.graphics.*
 import android.text.TextPaint
 import android.util.Log
+import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import com.example.smartdriver.utils.OfferData
 import com.example.smartdriver.utils.EvaluationResult
 import com.example.smartdriver.utils.IndividualRating
@@ -16,6 +18,7 @@ import com.example.smartdriver.utils.BorderRating
 import java.math.RoundingMode
 import java.text.DecimalFormat
 import java.util.*
+import kotlin.math.abs
 import kotlin.math.max
 
 @SuppressLint("ClickableViewAccessibility")
@@ -23,7 +26,7 @@ class OverlayView(context: Context) : View(context) {
 
     companion object {
         private const val TAG = "OverlayView"
-        // Cores
+        // Cores (inalteradas)
         private val BORDER_COLOR_GREEN = Color.parseColor("#4CAF50")
         private val BORDER_COLOR_YELLOW = Color.parseColor("#FFC107")
         private val BORDER_COLOR_RED = Color.parseColor("#F44336")
@@ -36,30 +39,35 @@ class OverlayView(context: Context) : View(context) {
         private val TEXT_COLOR_LABEL = Color.DKGRAY
         private val TEXT_COLOR_VALUE = Color.BLACK
         private val PLACEHOLDER_TEXT_COLOR = Color.LTGRAY
-        // Dimensões (DP/SP)
+        // Dimensões (DP/SP) (inalteradas)
         private const val PADDING_DP = 12f
-        private const val BORDER_WIDTH_DP = 3f
+        private const val BORDER_WIDTH_DP = 8f
         private const val CORNER_RADIUS_DP = 12f
         private const val TEXT_SPACING_VERTICAL_DP = 3f
         private const val LINE_SPACING_VERTICAL_DP = 6f
         private const val TEXT_SPACING_HORIZONTAL_DP = 15f
         private const val INDICATOR_BAR_WIDTH_DP = 4f
         private const val INDICATOR_BAR_MARGIN_DP = 6f
-        // Tamanhos Fonte Base (SP)
+        // Tamanhos Fonte Base (SP) (inalterados)
         private const val LABEL_TEXT_SIZE_SP = 11f
         private const val VALUE_TEXT_SIZE_SP = 13f
         private const val HIGHLIGHT_VALUE_TEXT_SIZE_SP = 14f
         private const val EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP = 15f
         private const val PLACEHOLDER_TEXT = "--"
+
+        // --- CONSTANTES PARA DETEÇÃO DE SWIPE ---
+        private const val SWIPE_MIN_DISTANCE_DP = 80f // Usar Float aqui
+        private const val SWIPE_MAX_OFF_PATH_DP = 100f // Usar Float aqui
+        private const val SWIPE_THRESHOLD_VELOCITY_DP = 100f // Usar Float aqui
     }
 
     // --- Estado e Configurações ---
     private var currentEvaluationResult: EvaluationResult? = null
     private var currentOfferData: OfferData? = null
     private var fontSizeScale = 1.0f
-    private var viewAlpha = 0.90f // Default alpha
+    private var viewAlpha = 0.90f
 
-    // --- Paints ---
+    // --- Paints (inalterados) ---
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BACKGROUND_COLOR }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = BORDER_COLOR_GRAY }
     private val labelTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_LABEL; typeface = Typeface.DEFAULT }
@@ -78,8 +86,12 @@ class OverlayView(context: Context) : View(context) {
     private var density: Float = 0f
     private var indicatorBarWidthPx: Float = 0f; private var indicatorBarMarginPx: Float = 0f
     private val euroHoraFormatter = DecimalFormat("0.0").apply { roundingMode = RoundingMode.HALF_UP }
+    // --- Dimensões para Swipe em PX ---
+    private var swipeMinDistancePx: Float = 0f
+    private var swipeMaxOffPathPx: Float = 0f
+    private var swipeThresholdVelocityPx: Float = 0f
 
-    // --- Retângulos ---
+    // --- Retângulos (inalterados) ---
     private val backgroundRect = RectF(); private val borderRect = RectF()
     private val indicatorRect = RectF()
 
@@ -92,58 +104,116 @@ class OverlayView(context: Context) : View(context) {
         updateDimensionsAndPaints()
 
         gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+
+            override fun onDown(e: MotionEvent): Boolean {
+                return true
+            }
+
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                Log.d(TAG, "Duplo toque no Overlay Principal! Enviando HIDE_OVERLAY.")
-                hideThisOverlay() // Esconde este overlay (e tracking se houver)
+                Log.d(TAG, "Duplo toque no Overlay Principal! Enviando DISMISS_MAIN_OVERLAY_ONLY.")
+                // *** ENVIA A NOVA AÇÃO PARA SÓ DISPENSAR O SEMÁFORO ***
+                val dismissIntent = Intent(context, OverlayService::class.java).apply {
+                    action = OverlayService.ACTION_DISMISS_MAIN_OVERLAY_ONLY
+                }
+                try { context.startService(dismissIntent) }
+                catch (ex: Exception) { Log.e(TAG, "Erro ao enviar DISMISS_MAIN_OVERLAY_ONLY: ${ex.message}") }
                 return true
             }
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                Log.d(TAG, "Toque único no Overlay Principal! Solicitando START_TRACKING.")
-                if (currentOfferData != null && currentEvaluationResult != null) {
-                    val startTrackingIntent = Intent(context, OverlayService::class.java).apply {
-                        action = OverlayService.ACTION_START_TRACKING
-                        putExtra(OverlayService.EXTRA_OFFER_DATA, currentOfferData)
-                        putExtra(OverlayService.EXTRA_EVALUATION_RESULT, currentEvaluationResult) // Necessário para VPH inicial
-                    }
-                    try { context.startService(startTrackingIntent) } // Serviço tratará de esconder este overlay
-                    catch (ex: Exception) { Log.e(TAG, "Erro ao enviar START_TRACKING: ${ex.message}") }
-                } else { Log.w(TAG, "Toque único ignorado: Sem dados válidos para iniciar tracking.") }
-                return true
+                Log.v(TAG, "Toque único ignorado.") // Usar Verbose para menos ruído
+                return false
             }
 
-            override fun onDown(e: MotionEvent): Boolean { return true } // Essencial
+            override fun onFling(
+                e1: MotionEvent, // Assinatura corrigida
+                e2: MotionEvent,
+                velocityX: Float,
+                velocityY: Float
+            ): Boolean {
+                try {
+                    val diffY = e2.y - e1.y
+                    val diffX = e2.x - e1.x
+
+                    Log.d(TAG, "onFling: diffX=$diffX, diffY=$diffY, velX=$velocityX, velY=$velocityY")
+
+                    if (abs(diffX) > abs(diffY)) { // Mais horizontal
+                        if (abs(diffX) > swipeMinDistancePx && abs(velocityX) > swipeThresholdVelocityPx) {
+                            if (diffX > 0) { // Para a direita
+                                Log.i(TAG, ">>> Swipe para DIREITA detectado! Iniciando Tracking... <<<")
+                                startTrackingMode()
+                                return true
+                            } else { Log.d(TAG, "Swipe para esquerda ignorado.") }
+                        } else { Log.d(TAG, "Swipe horizontal muito curto ou lento.") }
+                    } else { // Mais vertical
+                        if (abs(diffY) > swipeMinDistancePx && abs(velocityY) > swipeThresholdVelocityPx) {
+                            Log.d(TAG, "Swipe vertical ignorado.")
+                        } else { Log.d(TAG, "Movimento de fling não foi um swipe claro.") }
+                    }
+                } catch (exception: Exception) {
+                    Log.e(TAG, "Erro em onFling: ${exception.message}")
+                }
+                return false
+            }
         })
-    }
+    } // Fim do init
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        return gestureDetector.onTouchEvent(event) || super.onTouchEvent(event)
+        // Passa o evento para o detector E permite que a view processe outros eventos se o detector não consumir
+        val consumed = gestureDetector.onTouchEvent(event)
+        return consumed || super.onTouchEvent(event)
     }
 
-    // Função helper para esconder overlays
-    private fun hideThisOverlay() {
-        val hideIntent = Intent(context, OverlayService::class.java).apply { action = OverlayService.ACTION_HIDE_OVERLAY }
-        try { context.startService(hideIntent) }
-        catch (ex: Exception) { Log.e(TAG, "Erro ao enviar HIDE_OVERLAY: ${ex.message}") }
+    private fun startTrackingMode() {
+        if (currentOfferData != null && currentEvaluationResult != null) {
+            Log.d(TAG, "Enviando ACTION_START_TRACKING para OverlayService.")
+            val startTrackingIntent = Intent(context, OverlayService::class.java).apply {
+                action = OverlayService.ACTION_START_TRACKING
+                putExtra(OverlayService.EXTRA_OFFER_DATA, currentOfferData)
+                putExtra(OverlayService.EXTRA_EVALUATION_RESULT, currentEvaluationResult)
+            }
+            try { context.startService(startTrackingIntent) }
+            catch (ex: Exception) { Log.e(TAG, "Erro ao enviar START_TRACKING: ${ex.message}") }
+        } else {
+            Log.w(TAG, "Swipe detectado, mas sem dados válidos para iniciar tracking.")
+        }
     }
+
+    // *** REMOVIDA a função hideThisOverlay, pois a ação agora é específica ***
 
     // --- Desenho e Medição ---
     private fun updateDimensionsAndPaints() {
-        val scaledDensity = resources.displayMetrics.scaledDensity
-        paddingPx = PADDING_DP * density; borderRadiusPx = CORNER_RADIUS_DP * density
-        textSpacingVerticalPx = TEXT_SPACING_VERTICAL_DP * density; lineSpacingVerticalPx = LINE_SPACING_VERTICAL_DP * density
-        textSpacingHorizontalPx = TEXT_SPACING_HORIZONTAL_DP * density; borderPaint.strokeWidth = BORDER_WIDTH_DP * density
-        labelTextPaint.textSize = LABEL_TEXT_SIZE_SP * scaledDensity * fontSizeScale
-        valueTextPaint.textSize = VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
-        highlightValueTextPaint.textSize = HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
-        extraHighlightValueTextPaint.textSize = EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
-        placeholderTextPaint.textSize = HIGHLIGHT_VALUE_TEXT_SIZE_SP * scaledDensity * fontSizeScale
+        val displayMetrics = resources.displayMetrics
+        density = displayMetrics.density
+        val scaledDensity = displayMetrics.scaledDensity
+
+        paddingPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, PADDING_DP, displayMetrics)
+        borderRadiusPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, CORNER_RADIUS_DP, displayMetrics)
+        textSpacingVerticalPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TEXT_SPACING_VERTICAL_DP, displayMetrics)
+        lineSpacingVerticalPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, LINE_SPACING_VERTICAL_DP, displayMetrics)
+        textSpacingHorizontalPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TEXT_SPACING_HORIZONTAL_DP, displayMetrics)
+        borderPaint.strokeWidth = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, BORDER_WIDTH_DP, displayMetrics)
+
+        labelTextPaint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, LABEL_TEXT_SIZE_SP * fontSizeScale, displayMetrics)
+        valueTextPaint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, VALUE_TEXT_SIZE_SP * fontSizeScale, displayMetrics)
+        highlightValueTextPaint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, HIGHLIGHT_VALUE_TEXT_SIZE_SP * fontSizeScale, displayMetrics)
+        extraHighlightValueTextPaint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP * fontSizeScale, displayMetrics)
+        placeholderTextPaint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, HIGHLIGHT_VALUE_TEXT_SIZE_SP * fontSizeScale, displayMetrics) // Usa mesmo tamanho do highlight
+
         labelHeight = labelTextPaint.descent() - labelTextPaint.ascent(); valueHeight = valueTextPaint.descent() - valueTextPaint.ascent()
         highlightValueHeight = highlightValueTextPaint.descent() - highlightValueTextPaint.ascent()
         extraHighlightValueHeight = extraHighlightValueTextPaint.descent() - extraHighlightValueTextPaint.ascent()
-        indicatorBarWidthPx = INDICATOR_BAR_WIDTH_DP * density; indicatorBarMarginPx = INDICATOR_BAR_MARGIN_DP * density
+
+        indicatorBarWidthPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, INDICATOR_BAR_WIDTH_DP, displayMetrics)
+        indicatorBarMarginPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, INDICATOR_BAR_MARGIN_DP, displayMetrics)
+
+        // Calcula limites de swipe em pixels
+        swipeMinDistancePx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, SWIPE_MIN_DISTANCE_DP, displayMetrics)
+        swipeMaxOffPathPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, SWIPE_MAX_OFF_PATH_DP, displayMetrics)
+        swipeThresholdVelocityPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, SWIPE_THRESHOLD_VELOCITY_DP, displayMetrics)
     }
 
+    // onMeasure (inalterado)
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         updateDimensionsAndPaints()
         val placeholderWidth = placeholderTextPaint.measureText(PLACEHOLDER_TEXT)
@@ -159,11 +229,13 @@ class OverlayView(context: Context) : View(context) {
         setMeasuredDimension(measuredWidth, measuredHeight)
     }
 
+    // onSizeChanged (inalterado)
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh); backgroundRect.set(0f, 0f, w.toFloat(), h.toFloat())
         val halfBorder = borderPaint.strokeWidth / 2f; borderRect.set(halfBorder, halfBorder, w - halfBorder, h - halfBorder)
     }
 
+    // onDraw (inalterado)
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         borderPaint.color = getBorderColor(currentEvaluationResult?.combinedBorderRating ?: BorderRating.GRAY)
@@ -174,8 +246,8 @@ class OverlayView(context: Context) : View(context) {
         drawOfferDetailsWithIndicators(canvas)
     }
 
+    // drawOfferDetailsWithIndicators (inalterado)
     private fun drawOfferDetailsWithIndicators(canvas: Canvas) {
-        updateDimensionsAndPaints()
         val profitability = currentOfferData?.calculateProfitability(); val valuePerHour = currentOfferData?.calculateValuePerHour()
         val euroPerKmStr = profitability?.let { String.format(Locale.US, "%.2f", it) } ?: PLACEHOLDER_TEXT
         val euroPerHourStr = valuePerHour?.let { euroHoraFormatter.format(it).replace(",", ".") + "€" } ?: PLACEHOLDER_TEXT
@@ -225,7 +297,8 @@ class OverlayView(context: Context) : View(context) {
         valueTextPaint.color = TEXT_COLOR_VALUE; canvas.drawText(mainValueStr, rightColX, bottomValueY, valueTextPaint)
     }
 
-    // --- Métodos de atualização e cores ---
+
+    // --- Métodos de atualização e cores (inalterados) ---
     fun updateFontSize(scale: Float) { fontSizeScale = scale.coerceIn(0.5f, 2.0f); updateDimensionsAndPaints(); requestLayout(); invalidate() }
     fun updateAlpha(alphaValue: Float) { viewAlpha = alphaValue.coerceIn(0.0f, 1.0f); invalidate() }
     fun updateState(evaluationResult: EvaluationResult?, offerData: OfferData?) {

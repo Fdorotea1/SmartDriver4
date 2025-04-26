@@ -24,7 +24,7 @@ import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.ImageView.ScaleType
 import androidx.core.app.NotificationCompat
-import com.example.smartdriver.R
+import com.example.smartdriver.R // Import R
 import com.example.smartdriver.SettingsActivity
 import com.example.smartdriver.ScreenCaptureService
 import com.example.smartdriver.MediaProjectionData
@@ -32,8 +32,8 @@ import com.example.smartdriver.MainActivity
 import com.example.smartdriver.utils.OfferData
 import com.example.smartdriver.utils.EvaluationResult
 import com.example.smartdriver.utils.IndividualRating
-import com.example.smartdriver.utils.TripHistoryEntry
-import com.example.smartdriver.utils.BorderRating
+import com.example.smartdriver.utils.TripHistoryEntry // Import TripHistoryEntry
+import com.example.smartdriver.utils.BorderRating // Import BorderRating
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.util.Locale
@@ -45,10 +45,31 @@ class OverlayService : Service() {
 
     companion object {
         private const val TAG = "OverlayService"
-        // ... (Constantes inalteradas) ...
-        private const val NOTIFICATION_ID = 1002; private const val CHANNEL_ID = "overlay_service_channel"; private const val CHANNEL_NAME = "Overlay Service"; const val ACTION_SHOW_OVERLAY = "com.example.smartdriver.overlay.SHOW_OVERLAY"; const val ACTION_HIDE_OVERLAY = "com.example.smartdriver.overlay.HIDE_OVERLAY"; const val ACTION_UPDATE_SETTINGS = "com.example.smartdriver.overlay.UPDATE_SETTINGS"; const val ACTION_START_TRACKING = "com.example.smartdriver.overlay.START_TRACKING"; const val ACTION_STOP_TRACKING = "com.example.smartdriver.overlay.STOP_TRACKING"; const val ACTION_SHOW_QUICK_MENU = "com.example.smartdriver.overlay.SHOW_QUICK_MENU"; const val ACTION_DISMISS_MENU = "com.example.smartdriver.overlay.DISMISS_MENU"; const val ACTION_REQUEST_SHUTDOWN = "com.example.smartdriver.overlay.REQUEST_SHUTDOWN"; const val EXTRA_EVALUATION_RESULT = "evaluation_result"; const val EXTRA_OFFER_DATA = "offer_data"; const val EXTRA_FONT_SIZE = "font_size"; const val EXTRA_TRANSPARENCY = "transparency"; private const val TRACKING_UPDATE_INTERVAL_MS = 1000L; private const val MIN_TRACKING_TIME_SEC = 1L; const val HISTORY_PREFS_NAME = "SmartDriverHistoryPrefs"; const val KEY_TRIP_HISTORY = "trip_history_list_json"; @JvmStatic val isRunning = AtomicBoolean(false)
+        private const val NOTIFICATION_ID = 1002; private const val CHANNEL_ID = "overlay_service_channel"; private const val CHANNEL_NAME = "Overlay Service"
+        // Ações
+        const val ACTION_SHOW_OVERLAY = "com.example.smartdriver.overlay.SHOW_OVERLAY";
+        const val ACTION_HIDE_OVERLAY = "com.example.smartdriver.overlay.HIDE_OVERLAY";
+        const val ACTION_DISMISS_MAIN_OVERLAY_ONLY = "com.example.smartdriver.overlay.DISMISS_MAIN_ONLY"
+        const val ACTION_UPDATE_SETTINGS = "com.example.smartdriver.overlay.UPDATE_SETTINGS";
+        const val ACTION_START_TRACKING = "com.example.smartdriver.overlay.START_TRACKING";
+        const val ACTION_STOP_TRACKING = "com.example.smartdriver.overlay.STOP_TRACKING";
+        const val ACTION_SHOW_QUICK_MENU = "com.example.smartdriver.overlay.SHOW_QUICK_MENU";
+        const val ACTION_DISMISS_MENU = "com.example.smartdriver.overlay.DISMISS_MENU";
+        const val ACTION_REQUEST_SHUTDOWN = "com.example.smartdriver.overlay.REQUEST_SHUTDOWN";
+
+        // Extras e outras constantes
+        const val EXTRA_EVALUATION_RESULT = "evaluation_result";
+        const val EXTRA_OFFER_DATA = "offer_data";
+        const val EXTRA_FONT_SIZE = "font_size";
+        const val EXTRA_TRANSPARENCY = "transparency";
+        private const val TRACKING_UPDATE_INTERVAL_MS = 1000L;
+        private const val MIN_TRACKING_TIME_SEC = 1L;
+        const val HISTORY_PREFS_NAME = "SmartDriverHistoryPrefs";
+        const val KEY_TRIP_HISTORY = "trip_history_list_json";
+        @JvmStatic val isRunning = AtomicBoolean(false)
     }
 
+    // Variáveis de estado e UI
     private var windowManager: WindowManager? = null
     private var mainOverlayView: OverlayView? = null
     private var trackingOverlayView: TrackingOverlayView? = null
@@ -68,10 +89,10 @@ class OverlayService : Service() {
     private val trackingUpdateHandler = Handler(Looper.getMainLooper()); private lateinit var trackingUpdateRunnable: Runnable
     private var goodHourThreshold: Double = 15.0; private var poorHourThreshold: Double = 8.0
     private val gson = Gson(); private lateinit var historyPrefs: SharedPreferences
-    private var initialIconX: Int = 0; private var initialIconY: Int = 0
-    private var initialTouchX: Float = 0f; private var initialTouchY: Float = 0f
+    // Variáveis para arrastar ícone (movidas para dentro do listener)
+    // private var initialIconX: Int = 0; private var initialIconY: Int = 0
+    // private var initialTouchX: Float = 0f; private var initialTouchY: Float = 0f
     private var touchSlop: Int = 0
-    // --- Variáveis de arrasto da Tracking View REMOVIDAS ---
 
     override fun onCreate() {
         super.onCreate(); Log.i(TAG, "Serviço Overlay CRIADO"); isRunning.set(true)
@@ -95,64 +116,192 @@ class OverlayService : Service() {
     private fun createNotificationChannel() { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW).apply { description = "Overlay Service Notification"; enableLights(false); enableVibration(false); setShowBadge(false) }; val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager; try { nm.createNotificationChannel(channel) } catch (e: Exception) {} } }
 
     // --- Tratamento de Intents ---
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { Log.d(TAG, "onStartCommand: Action=${intent?.action}"); when (intent?.action) { ACTION_SHOW_OVERLAY -> handleShowOverlay(intent); ACTION_HIDE_OVERLAY -> handleHideOverlay(); ACTION_START_TRACKING -> handleStartTracking(intent); ACTION_STOP_TRACKING -> handleStopTracking(); ACTION_UPDATE_SETTINGS -> handleUpdateSettings(intent); ACTION_SHOW_QUICK_MENU -> handleShowQuickMenu(); ACTION_DISMISS_MENU -> handleDismissMenu(); ACTION_REQUEST_SHUTDOWN -> handleShutdownRequest(); else -> Log.w(TAG, "Ação desconhecida/nula: ${intent?.action}") }; return START_REDELIVER_INTENT }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand: Action=${intent?.action}")
+        when (intent?.action) {
+            ACTION_SHOW_OVERLAY -> handleShowOverlay(intent)
+            ACTION_HIDE_OVERLAY -> handleHideOverlay()
+            ACTION_DISMISS_MAIN_OVERLAY_ONLY -> handleDismissMainOverlayOnly()
+            ACTION_START_TRACKING -> handleStartTracking(intent)
+            ACTION_STOP_TRACKING -> handleStopTracking()
+            ACTION_UPDATE_SETTINGS -> handleUpdateSettings(intent)
+            ACTION_SHOW_QUICK_MENU -> handleShowQuickMenu()
+            ACTION_DISMISS_MENU -> handleDismissMenu()
+            ACTION_REQUEST_SHUTDOWN -> handleShutdownRequest()
+            else -> Log.w(TAG, "Ação desconhecida/nula: ${intent?.action}")
+        }
+        return START_REDELIVER_INTENT
+    }
+
     private fun handleShowOverlay(intent: Intent?) { val evalResult: EvaluationResult? = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java); val offerData: OfferData? = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java); if (evalResult != null && offerData != null) { showMainOverlay(evalResult, offerData); updateNotification("Oferta: ${offerData.value}€", isCurrentlyTracking) } else { hideMainOverlay() } }
-    private fun handleHideOverlay() { Log.d(TAG, "$ACTION_HIDE_OVERLAY recebido."); if (isCurrentlyTracking) { stopTrackingAndSaveToHistory() }; hideMainOverlay(); removeQuickMenuOverlay(); updateNotification("Overlay pronto", false) }
-    private fun handleStartTracking(intent: Intent?) { val offerDataToTrack: OfferData? = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java); val initialEvaluationResult: EvaluationResult? = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java); if (offerDataToTrack != null && initialEvaluationResult != null) { if (!isCurrentlyTracking) { Log.i(TAG, "Iniciando Tracking: ${offerDataToTrack.value}€"); hideMainOverlay(); removeQuickMenuOverlay(); isCurrentlyTracking = true; trackingStartTimeMs = System.currentTimeMillis(); trackedOfferData = offerDataToTrack; trackedOfferValue = offerDataToTrack.value.replace(",", ".").toDoubleOrNull() ?: 0.0; trackedInitialVph = offerDataToTrack.calculateValuePerHour(); trackedInitialVpk = offerDataToTrack.calculateProfitability(); trackedInitialKmRating = initialEvaluationResult.kmRating; trackedCombinedBorderRating = initialEvaluationResult.combinedBorderRating; loadTrackingThresholds(); val initialDist = offerDataToTrack.calculateTotalDistance()?.let { if (it > 0) it else null }; val initialDur = offerDataToTrack.calculateTotalTimeMinutes()?.let { if (it > 0) it else null }; val offerValStr = offerDataToTrack.value; showTrackingOverlay(trackedInitialVpk, initialDist, initialDur, offerValStr, trackedInitialKmRating, trackedCombinedBorderRating); trackingUpdateHandler.removeCallbacks(trackingUpdateRunnable); trackingUpdateHandler.post(trackingUpdateRunnable); updateNotification("Acompanhando Viagem...", true) } else { Log.w(TAG, "$ACTION_START_TRACKING ignorado.") } } else { Log.e(TAG, "$ACTION_START_TRACKING sem dados.") } }
+    private fun handleHideOverlay() { Log.d(TAG, "$ACTION_HIDE_OVERLAY recebido."); if (isCurrentlyTracking) { stopTrackingAndSaveToHistory() }; hideMainOverlay(); hideTrackingOverlay(); removeQuickMenuOverlay(); updateNotification("Overlay pronto", false) }
+    private fun handleDismissMainOverlayOnly() { Log.d(TAG, "$ACTION_DISMISS_MAIN_OVERLAY_ONLY recebido."); hideMainOverlay(); }
+    private fun handleStartTracking(intent: Intent?) { val offerDataToTrack: OfferData? = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java); val initialEvaluationResult: EvaluationResult? = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java); if (offerDataToTrack != null && initialEvaluationResult != null) { if (!isCurrentlyTracking) { Log.i(TAG, "Iniciando Tracking: ${offerDataToTrack.value}€"); hideMainOverlay(); removeQuickMenuOverlay(); isCurrentlyTracking = true; trackingStartTimeMs = System.currentTimeMillis(); trackedOfferData = offerDataToTrack; trackedOfferValue = offerDataToTrack.value.replace(",", ".").toDoubleOrNull() ?: 0.0; trackedInitialVph = offerDataToTrack.calculateValuePerHour(); trackedInitialVpk = offerDataToTrack.calculateProfitability(); trackedInitialKmRating = initialEvaluationResult.kmRating; trackedCombinedBorderRating = initialEvaluationResult.combinedBorderRating; loadTrackingThresholds(); val initialDist = offerDataToTrack.calculateTotalDistance()?.let { if (it > 0) it else null }; val initialDur = offerDataToTrack.calculateTotalTimeMinutes()?.let { if (it > 0) it else null }; val offerValStr = offerDataToTrack.value; showTrackingOverlay(trackedInitialVpk, initialDist, initialDur, offerValStr, trackedInitialKmRating, trackedCombinedBorderRating); trackingUpdateHandler.removeCallbacks(trackingUpdateRunnable); trackingUpdateHandler.post(trackingUpdateRunnable); updateNotification("Acompanhando Viagem...", true) } else { Log.w(TAG, "$ACTION_START_TRACKING ignorado (já em tracking).") } } else { Log.e(TAG, "$ACTION_START_TRACKING sem dados válidos.") } }
     private fun handleStopTracking() { Log.i(TAG, "$ACTION_STOP_TRACKING recebido."); stopTrackingAndSaveToHistory() }
     private fun handleUpdateSettings(intent: Intent?) { Log.d(TAG, "$ACTION_UPDATE_SETTINGS recebido."); loadTrackingThresholds(); val defSize = SettingsActivity.getFontSize(this); val defTrans = SettingsActivity.getTransparency(this); val size = intent?.getIntExtra(EXTRA_FONT_SIZE, defSize) ?: defSize; val trans = intent?.getIntExtra(EXTRA_TRANSPARENCY, defTrans) ?: defTrans; applyAppearanceSettings(size, trans); updateLayouts() }
     private fun handleShowQuickMenu() { Log.d(TAG, "$ACTION_SHOW_QUICK_MENU recebido."); addQuickMenuOverlay() }
     private fun handleDismissMenu() { Log.d(TAG, "$ACTION_DISMISS_MENU recebido."); removeQuickMenuOverlay() }
-    private fun handleShutdownRequest() { Log.w(TAG, "$ACTION_REQUEST_SHUTDOWN recebido! Desligando..."); removeQuickMenuOverlay(); stopTrackingAndSaveToHistory(); hideMainOverlay(); removeFloatingIconOverlay(); try { stopService(Intent(this, ScreenCaptureService::class.java)) } catch (e: Exception) { }; MediaProjectionData.clear(); val shutdownIntent = Intent(MainActivity.ACTION_SHUTDOWN_APP); try { sendBroadcast(shutdownIntent) } catch (e: Exception) { }; stopSelf() }
+    private fun handleShutdownRequest() { Log.w(TAG, "$ACTION_REQUEST_SHUTDOWN recebido! Desligando..."); removeQuickMenuOverlay(); stopTrackingAndSaveToHistory(); hideMainOverlay(); hideTrackingOverlay(); removeFloatingIconOverlay(); try { stopService(Intent(this, ScreenCaptureService::class.java)) } catch (e: Exception) { }; MediaProjectionData.clear(); val shutdownIntent = Intent(MainActivity.ACTION_SHUTDOWN_APP); try { sendBroadcast(shutdownIntent) } catch (e: Exception) { }; stopSelf() }
     private fun <T : Any> getParcelableExtraCompat(intent: Intent?, key: String, clazz: Class<T>): T? { return intent?.let { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { it.getParcelableExtra(key, clazz) } else { @Suppress("DEPRECATION") it.getParcelableExtra(key) as? T } } }
 
     // --- Gestão das Views Overlay ---
-    private fun showMainOverlay(evaluationResult: EvaluationResult, offerData: OfferData) { if (windowManager == null) return; if (mainOverlayView == null) { mainOverlayView = OverlayView(this); applyAppearanceSettingsToView(mainOverlayView) }; mainOverlayView?.updateState(evaluationResult, offerData); try { if (!isMainOverlayAdded) { windowManager?.addView(mainOverlayView, mainLayoutParams); isMainOverlayAdded = true } else { windowManager?.updateViewLayout(mainOverlayView, mainLayoutParams) } } catch (e: Exception) { isMainOverlayAdded = false } }
-    private fun hideMainOverlay() { if (isMainOverlayAdded && mainOverlayView != null) { try { windowManager?.removeView(mainOverlayView) } catch (_: Exception) {} finally { isMainOverlayAdded = false; mainOverlayView = null } } }
+    private fun showMainOverlay(evaluationResult: EvaluationResult, offerData: OfferData) { if (windowManager == null) return; if (mainOverlayView == null) { mainOverlayView = OverlayView(this); applyAppearanceSettingsToView(mainOverlayView) }; mainOverlayView?.updateState(evaluationResult, offerData); try { if (!isMainOverlayAdded) { windowManager?.addView(mainOverlayView, mainLayoutParams); isMainOverlayAdded = true } else { windowManager?.updateViewLayout(mainOverlayView, mainLayoutParams) } } catch (e: Exception) { Log.e(TAG,"Erro add/upd MainOverlay: ${e.message}"); isMainOverlayAdded = false; mainOverlayView = null; } }
+    private fun hideMainOverlay() { if (isMainOverlayAdded && mainOverlayView != null) { try { windowManager?.removeViewImmediate(mainOverlayView) } catch (_: Exception) {} finally { isMainOverlayAdded = false; mainOverlayView = null } } }
+    private fun showTrackingOverlay( initialVpk: Double?, initialDistance: Double?, initialDuration: Int?, offerVal: String?, initialKmRating: IndividualRating, combinedBorderRating: BorderRating ) { val currentWindowManager = windowManager ?: return; if (trackingOverlayView == null) { Log.d(TAG, "Criando nova TrackingOverlayView..."); trackingOverlayView = TrackingOverlayView(this, currentWindowManager, trackingLayoutParams); applyAppearanceSettingsToView(trackingOverlayView) }; trackingOverlayView?.updateInitialData(initialVpk, initialDistance, initialDuration, offerVal, initialKmRating, combinedBorderRating); try { if (!isTrackingOverlayAdded && trackingOverlayView != null) { currentWindowManager.addView(trackingOverlayView, trackingLayoutParams); isTrackingOverlayAdded = true; Log.i(TAG, "Overlay Acompanhamento ADD.") } else { Log.d(TAG, "TrackingOverlay já existe, dados atualizados.") } } catch (e: Exception) { Log.e(TAG, "Erro add/upd TrackingOverlay: ${e.message}"); isTrackingOverlayAdded = false; trackingOverlayView = null; } }
+    private fun hideTrackingOverlay() { if (isTrackingOverlayAdded && trackingOverlayView != null) { try { windowManager?.removeViewImmediate(trackingOverlayView) } catch (_: Exception) {} finally { isTrackingOverlayAdded = false; trackingOverlayView = null } } }
+    @SuppressLint("ClickableViewAccessibility") private fun addFloatingIconOverlay() { if (windowManager == null || isFloatingIconAdded) return; if (floatingIconView == null) { floatingIconView = ImageButton(this).apply { setImageResource(R.drawable.smartdriver); setBackgroundResource(R.drawable.fab_background); scaleType = ScaleType.CENTER_INSIDE; setOnTouchListener(createFloatingIconTouchListener()) } }; try { windowManager?.addView(floatingIconView, floatingIconLayoutParams); isFloatingIconAdded = true } catch (e: Exception) { Log.e(TAG,"Erro add FloatingIcon: ${e.message}"); isFloatingIconAdded = false; floatingIconView = null } }
+    private fun removeFloatingIconOverlay() { if (isFloatingIconAdded && floatingIconView != null) { try { windowManager?.removeViewImmediate(floatingIconView) } catch (_: Exception) {} finally { isFloatingIconAdded = false; floatingIconView = null } } }
+    private fun addQuickMenuOverlay() { if (windowManager == null || isQuickMenuAdded) return; if (quickMenuView == null) { quickMenuView = MenuView(this) }; try { windowManager?.addView(quickMenuView, menuLayoutParams); isQuickMenuAdded = true } catch (e: Exception) { Log.e(TAG,"Erro add QuickMenu: ${e.message}"); isQuickMenuAdded = false; quickMenuView = null } }
+    private fun removeQuickMenuOverlay() { if (isQuickMenuAdded && quickMenuView != null) { try { windowManager?.removeViewImmediate(quickMenuView) } catch (_: Exception) {} finally { isQuickMenuAdded = false; quickMenuView = null } } }
 
-    // --- showTrackingOverlay MODIFICADO para passar WM e Params ---
-    private fun showTrackingOverlay( initialVpk: Double?, initialDistance: Double?, initialDuration: Int?, offerVal: String?, initialKmRating: IndividualRating, combinedBorderRating: BorderRating ) {
-        val currentWindowManager = windowManager ?: return
-        if (trackingOverlayView == null) {
-            Log.d(TAG, "Criando nova TrackingOverlayView...")
-            // <<< PASSA WM e Params >>>
-            trackingOverlayView = TrackingOverlayView(this, currentWindowManager, trackingLayoutParams)
-            applyAppearanceSettingsToView(trackingOverlayView)
-            // <<< Listener REMOVIDO daqui >>>
-        }
-        trackingOverlayView?.updateInitialData(initialVpk, initialDistance, initialDuration, offerVal, initialKmRating, combinedBorderRating)
-        try {
-            if (!isTrackingOverlayAdded && trackingOverlayView != null) {
-                currentWindowManager.addView(trackingOverlayView, trackingLayoutParams)
-                isTrackingOverlayAdded = true; Log.i(TAG, "Overlay Acompanhamento ADD.")
-            } else {
-                Log.d(TAG, "TrackingOverlay já existe, dados atualizados.")
-            }
-        } catch (e: Exception) { Log.e(TAG, "Erro add/upd TrackingOverlay: ${e.message}"); isTrackingOverlayAdded = false }
-    }
-    // --- Fim showTrackingOverlay ---
 
-    private fun hideTrackingOverlay() { if (isTrackingOverlayAdded && trackingOverlayView != null) { try { windowManager?.removeView(trackingOverlayView) } catch (_: Exception) {} finally { isTrackingOverlayAdded = false; trackingOverlayView = null } } }
-    @SuppressLint("ClickableViewAccessibility") private fun addFloatingIconOverlay() { if (windowManager == null || isFloatingIconAdded) return; if (floatingIconView == null) { floatingIconView = ImageButton(this).apply { setImageResource(R.drawable.smartdriver); setBackgroundResource(R.drawable.fab_background); scaleType = ScaleType.CENTER_INSIDE; setOnTouchListener(createFloatingIconTouchListener()) } }; try { windowManager?.addView(floatingIconView, floatingIconLayoutParams); isFloatingIconAdded = true } catch (e: Exception) { isFloatingIconAdded = false; floatingIconView = null } }
-    private fun removeFloatingIconOverlay() { if (isFloatingIconAdded && floatingIconView != null) { try { windowManager?.removeView(floatingIconView) } catch (_: Exception) {} finally { isFloatingIconAdded = false; floatingIconView = null } } }
-    private fun addQuickMenuOverlay() { if (windowManager == null || isQuickMenuAdded) return; if (quickMenuView == null) { quickMenuView = MenuView(this) }; try { windowManager?.addView(quickMenuView, menuLayoutParams); isQuickMenuAdded = true } catch (e: Exception) { isQuickMenuAdded = false; quickMenuView = null } }
-    private fun removeQuickMenuOverlay() { if (isQuickMenuAdded && quickMenuView != null) { try { windowManager?.removeView(quickMenuView) } catch (_: Exception) {} finally { isQuickMenuAdded = false; quickMenuView = null } } }
-
-    // --- REMOVIDA a função createTrackingViewTouchListener ---
-
-    // --- Listener do Ícone Flutuante ---
+    // *** Listener do Ícone Flutuante CORRIGIDO ***
     @SuppressLint("ClickableViewAccessibility")
-    private fun createFloatingIconTouchListener(): View.OnTouchListener { var startTime: Long = 0; return View.OnTouchListener { view, event -> val currentRawX = event.rawX; val currentRawY = event.rawY; val action = event.action; when (action) { MotionEvent.ACTION_DOWN -> { startTime = System.currentTimeMillis(); initialIconX = floatingIconLayoutParams.x; initialIconY = floatingIconLayoutParams.y; initialTouchX = currentRawX; initialTouchY = currentRawY; /*Log*/; return@OnTouchListener true }; MotionEvent.ACTION_MOVE -> { val dX = currentRawX - initialTouchX; val dY = currentRawY - initialTouchY; val newX = initialIconX + dX.toInt(); val newY = initialIconY + dY.toInt(); /*Log*/; floatingIconLayoutParams.x = newX; floatingIconLayoutParams.y = newY; try { if (isFloatingIconAdded) windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams) } catch (e: Exception) { }; return@OnTouchListener true }; MotionEvent.ACTION_UP -> { val duration = System.currentTimeMillis() - startTime; val dX = currentRawX - initialTouchX; val dY = currentRawY - initialTouchY; val isClick = abs(dX) < touchSlop && abs(dY) < touchSlop && duration < ViewConfiguration.getTapTimeout(); if (isClick) { /*Log*/; if (!isQuickMenuAdded) { handleShowQuickMenu() } else { handleDismissMenu() }; view.performClick() } else { /*Log*/ }; return@OnTouchListener true } }; return@OnTouchListener false } }
+    private fun createFloatingIconTouchListener(): View.OnTouchListener {
+        // Variáveis para controlar o estado do toque/arrasto
+        var startTime: Long = 0
+        var initialX = 0 // Posição inicial X da janela do ícone
+        var initialY = 0 // Posição inicial Y da janela do ícone
+        var initialTouchX = 0f // Posição X inicial do toque na tela
+        var initialTouchY = 0f // Posição Y inicial do toque na tela
+        var isDragging = false // Flag para saber se está a arrastar ou foi só um clique
+
+        return View.OnTouchListener { view, event ->
+            // Obtém as coordenadas raw (relativas à tela inteira)
+            val currentRawX = event.rawX
+            val currentRawY = event.rawY
+
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    // Guarda o tempo e as posições iniciais
+                    startTime = System.currentTimeMillis()
+                    initialX = floatingIconLayoutParams.x
+                    initialY = floatingIconLayoutParams.y
+                    initialTouchX = currentRawX
+                    initialTouchY = currentRawY
+                    isDragging = false // Assume que não é drag inicialmente
+                    true // Consome o evento DOWN
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    // Calcula o deslocamento desde o início do toque
+                    val dX = currentRawX - initialTouchX
+                    val dY = currentRawY - initialTouchY
+
+                    // Se o movimento ultrapassar o limite (slop), considera como drag
+                    if (!isDragging && (abs(dX) > touchSlop || abs(dY) > touchSlop)) {
+                        Log.v(TAG, "Dragging started...")
+                        isDragging = true
+                    }
+
+                    // Se estiver a arrastar, atualiza a posição da janela
+                    if (isDragging) {
+                        val newX = initialX + dX.toInt()
+                        val newY = initialY + dY.toInt()
+
+                        // Obtem limites da tela para manter o ícone dentro
+                        val screenWidth = Resources.getSystem().displayMetrics.widthPixels
+                        val screenHeight = Resources.getSystem().displayMetrics.heightPixels
+                        val iconWidth = view.width
+                        val iconHeight = view.height
+
+                        // Aplica a nova posição, restringindo aos limites da tela
+                        floatingIconLayoutParams.x = newX.coerceIn(0, screenWidth - iconWidth)
+                        floatingIconLayoutParams.y = newY.coerceIn(0, screenHeight - iconHeight)
+
+                        try {
+                            // Atualiza o layout da view se ela ainda estiver adicionada
+                            if (isFloatingIconAdded && floatingIconView != null) {
+                                windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams)
+                            }
+                        } catch (e: Exception) {
+                            // Ignora erros se a view já foi removida ou o WM não está disponível
+                            Log.e(TAG, "Erro ao atualizar layout do ícone flutuante: ${e.message}")
+                        }
+                    }
+                    true // Consome o evento MOVE
+                }
+                MotionEvent.ACTION_UP -> {
+                    val duration = System.currentTimeMillis() - startTime
+
+                    // Determina se foi um clique (não estava a arrastar E duração foi curta)
+                    // Usar a flag isDragging é mais fiável que verificar o delta X/Y aqui
+                    val isClick = !isDragging && duration < ViewConfiguration.getTapTimeout()
+
+                    if (isClick) {
+                        Log.d(TAG, "Floating icon CLICKED")
+                        // Alterna a visibilidade do menu rápido
+                        if (!isQuickMenuAdded) {
+                            handleShowQuickMenu()
+                        } else {
+                            handleDismissMenu()
+                        }
+                        // Chama performClick para acessibilidade e efeitos visuais (ripple)
+                        view.performClick()
+                    } else {
+                        // Se isDragging era true, foi um drag, não faz nada especial no UP
+                        Log.d(TAG, "Floating icon DRAGGED and released")
+                    }
+
+                    // Reseta o estado de dragging para o próximo toque
+                    isDragging = false
+                    true // Consome o evento UP
+                }
+                else -> false // Outras ações (CANCEL, etc.) não são tratadas aqui
+            }
+        }
+    } // --- Fim de createFloatingIconTouchListener ---
+
 
     // --- Funções de Tracking e Salvamento ---
     private fun stopTrackingTimer() { trackingUpdateHandler.removeCallbacks(trackingUpdateRunnable) }
-    private fun stopTrackingAndSaveToHistory() { if (!isCurrentlyTracking) { return }; Log.i(TAG, "Finalizando Tracking e Salvando"); val endTimeMs = System.currentTimeMillis(); stopTrackingTimer(); val finalElapsedTimeMs = endTimeMs - trackingStartTimeMs; val finalElapsedTimeSec = max(MIN_TRACKING_TIME_SEC, finalElapsedTimeMs / 1000); var finalVph : Double? = null; if (trackedOfferValue > 0) { val finalHours = finalElapsedTimeSec / 3600.0; if (finalHours > 0) { val calc = trackedOfferValue / finalHours; if (calc.isFinite()) { finalVph = calc } } }; Log.i(TAG, "Dados Finais: Duração=${finalElapsedTimeSec}s, €/h Final=${finalVph?.let { String.format(Locale.US, "%.1f", it) } ?: "--"}"); val entry = TripHistoryEntry(startTimeMillis = trackingStartTimeMs, endTimeMillis = endTimeMs, durationSeconds = finalElapsedTimeSec, offerValue = trackedOfferValue.takeIf { it > 0 }, initialVph = trackedInitialVph, finalVph = finalVph, initialVpk = trackedInitialVpk, initialDistanceKm = trackedOfferData?.calculateTotalDistance()?.let { if (it > 0) it else null }, initialDurationMinutes = trackedOfferData?.calculateTotalTimeMinutes()?.let { if (it > 0) it else null }, serviceType = trackedOfferData?.serviceType?.takeIf { it.isNotEmpty() }); saveHistoryEntry(entry); isCurrentlyTracking = false; trackingStartTimeMs = 0L; trackedOfferData = null; trackedOfferValue = 0.0; trackedInitialVph = null; trackedInitialVpk = null; trackedInitialKmRating = IndividualRating.UNKNOWN; trackedCombinedBorderRating = BorderRating.GRAY; hideTrackingOverlay(); updateNotification("Overlay pronto", false) }
-    private fun saveHistoryEntry(newEntry: TripHistoryEntry) { try { val newJson = gson.toJson(newEntry); val currentJson = historyPrefs.getString(KEY_TRIP_HISTORY, "[]"); val listType = object : TypeToken<MutableList<String>>() {}.type; val list: MutableList<String> = gson.fromJson(currentJson, listType) ?: mutableListOf(); list.add(newJson); val updatedJson = gson.toJson(list); historyPrefs.edit().putString(KEY_TRIP_HISTORY, updatedJson).apply(); Log.i(TAG,"Histórico salvo. Total: ${list.size}") } catch (e: Exception) { Log.e(TAG, "ERRO salvar histórico: ${e.message}", e) } }
+    private fun stopTrackingAndSaveToHistory() {
+        if (!isCurrentlyTracking) { return };
+        Log.i(TAG, "Finalizando Tracking e Salvando");
+        val endTimeMs = System.currentTimeMillis();
+        stopTrackingTimer();
+        val finalElapsedTimeMs = endTimeMs - trackingStartTimeMs;
+        val finalElapsedTimeSec = max(MIN_TRACKING_TIME_SEC, finalElapsedTimeMs / 1000);
+        var finalVph : Double? = null;
+        if (trackedOfferValue > 0) {
+            val finalHours = finalElapsedTimeSec / 3600.0;
+            if (finalHours > 0) {
+                val calc = trackedOfferValue / finalHours;
+                if (calc.isFinite()) { finalVph = calc }
+            }
+        };
+        Log.i(TAG, "Dados Finais: Duração=${finalElapsedTimeSec}s, €/h Final=${finalVph?.let { String.format(Locale.US, "%.1f", it) } ?: "--"}");
+        val entry = TripHistoryEntry(
+            startTimeMillis = trackingStartTimeMs,
+            endTimeMillis = endTimeMs,
+            durationSeconds = finalElapsedTimeSec,
+            offerValue = trackedOfferValue.takeIf { it > 0 },
+            initialVph = trackedInitialVph,
+            finalVph = finalVph,
+            initialVpk = trackedInitialVpk,
+            initialDistanceKm = trackedOfferData?.calculateTotalDistance()?.let { if (it > 0) it else null },
+            initialDurationMinutes = trackedOfferData?.calculateTotalTimeMinutes()?.let { if (it > 0) it else null },
+            serviceType = trackedOfferData?.serviceType?.takeIf { it.isNotEmpty() },
+            originalBorderRating = this.trackedCombinedBorderRating
+        )
+        saveHistoryEntry(entry);
+        // Resetar estado
+        isCurrentlyTracking = false;
+        trackingStartTimeMs = 0L;
+        trackedOfferData = null;
+        trackedOfferValue = 0.0;
+        trackedInitialVph = null;
+        trackedInitialVpk = null;
+        trackedInitialKmRating = IndividualRating.UNKNOWN;
+        trackedCombinedBorderRating = BorderRating.GRAY;
+        hideTrackingOverlay();
+        updateNotification("Overlay pronto", false)
+    }
+    private fun saveHistoryEntry(newEntry: TripHistoryEntry) { try { val newJson = gson.toJson(newEntry); val currentJson = historyPrefs.getString(KEY_TRIP_HISTORY, "[]"); val listType = object : TypeToken<MutableList<String>>() {}.type; val list: MutableList<String> = try { gson.fromJson(currentJson, listType) } catch (e: Exception) { mutableListOf() } ?: mutableListOf(); list.add(newJson); val updatedJson = gson.toJson(list); historyPrefs.edit().putString(KEY_TRIP_HISTORY, updatedJson).apply(); Log.i(TAG,"Histórico salvo. Total: ${list.size}") } catch (e: Exception) { Log.e(TAG, "ERRO salvar histórico: ${e.message}", e) } }
 
     // --- Gestão Aparência ---
     private fun applyAppearanceSettings(fontSizePercent: Int, transparencyPercent: Int) { applyAppearanceSettingsToView(mainOverlayView, fontSizePercent, transparencyPercent); applyAppearanceSettingsToView(trackingOverlayView, null, transparencyPercent) }
     private fun applyAppearanceSettingsToView(view: View?, fontSizePercent: Int? = null, transparencyPercent: Int? = null) { view ?: return; val trans = transparencyPercent ?: SettingsActivity.getTransparency(this); val alpha = (1.0f - (trans / 100f)).coerceIn(0.0f, 1.0f); when (view) { is OverlayView -> { val size = fontSizePercent ?: SettingsActivity.getFontSize(this); val scale = size / 100f; view.updateFontSize(scale); view.updateAlpha(alpha) }; is TrackingOverlayView -> { view.alpha = alpha } } }
-    private fun updateLayouts() { if (isMainOverlayAdded) { try { windowManager?.updateViewLayout(mainOverlayView, mainLayoutParams) } catch (_: Exception) {} }; if (isFloatingIconAdded) { try { windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams) } catch (_: Exception) {} }; if (isQuickMenuAdded) { try { windowManager?.updateViewLayout(quickMenuView, menuLayoutParams) } catch (_: Exception) {} } /* Tracking view atualiza-se sozinha */ }
+    private fun updateLayouts() { if (isMainOverlayAdded && mainOverlayView != null) { try { windowManager?.updateViewLayout(mainOverlayView, mainLayoutParams) } catch (_: Exception) {} }; if (isFloatingIconAdded && floatingIconView != null) { try { windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams) } catch (_: Exception) {} }; if (isQuickMenuAdded && quickMenuView != null) { try { windowManager?.updateViewLayout(quickMenuView, menuLayoutParams) } catch (_: Exception) {} } }
 
     // --- onBind e onDestroy ---
     override fun onBind(intent: Intent?): IBinder? { return null }
