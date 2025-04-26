@@ -6,6 +6,44 @@ import androidx.annotation.Keep
 import kotlinx.parcelize.Parcelize
 import java.util.Locale
 
+// --- FUNÇÕES AUXILIARES DE CORREÇÃO ---
+/** Tenta converter String para Double, corrigindo ',' para '.' e 'l'/'I' para '1'. */
+fun String?.toDoubleOrNullWithCorrection(): Double? {
+    if (this.isNullOrBlank()) return null
+    try {
+        val corrected = this.replace(',', '.')
+            .replace('l', '1', ignoreCase = true) // l ou L -> 1
+            .replace('I', '1')                   // I -> 1
+            // Adicionar mais correções se necessário (ex: O -> 0)
+            // .replace('O', '0', ignoreCase = true)
+            .replace(Regex("[^0-9.]"), "") // Remove caracteres não numéricos exceto ponto
+        // Log.v("CorrectionUtil", "toDouble: Original='$this', Corrigido='$corrected'") // Log para depuração
+        return corrected.toDoubleOrNull()
+    } catch (e: Exception) {
+        Log.e("CorrectionUtil", "Erro em toDoubleOrNullWithCorrection para '$this': ${e.message}")
+        return null
+    }
+}
+
+/** Tenta converter String para Int, corrigindo 'l'/'I' para '1'. */
+fun String?.toIntOrNullWithCorrection(): Int? {
+    if (this.isNullOrBlank()) return null
+    try {
+        val corrected = this.replace('l', '1', ignoreCase = true) // l ou L -> 1
+            .replace('I', '1')                   // I -> 1
+            // Adicionar mais correções se necessário (ex: O -> 0)
+            // .replace('O', '0', ignoreCase = true)
+            .replace(Regex("[^0-9]"), "") // Remove caracteres não numéricos
+        // Log.v("CorrectionUtil", "toInt: Original='$this', Corrigido='$corrected'") // Log para depuração
+        return corrected.toIntOrNull()
+    } catch (e: Exception) {
+        Log.e("CorrectionUtil", "Erro em toIntOrNullWithCorrection para '$this': ${e.message}")
+        return null
+    }
+}
+// --- FIM DAS FUNÇÕES AUXILIARES ---
+
+
 @Keep
 @Parcelize
 data class OfferData(
@@ -22,20 +60,19 @@ data class OfferData(
 
     companion object {
         private const val TAG = "OfferData"
-        // Constantes para validação MÍNIMA dos dados EXTRAÍDOS
-        private const val MIN_VALID_EXTRACTED_DISTANCE = 0.01 // km (quase zero)
-        private const val MIN_VALID_EXTRACTED_DURATION = 0   // min (permite zero se extraído)
-        private const val MIN_VALID_VALUE = 0.01             // €
+        private const val MIN_VALID_EXTRACTED_DISTANCE = 0.01
+        private const val MIN_VALID_EXTRACTED_DURATION = 0
+        private const val MIN_VALID_VALUE = 0.01
     }
 
     // --- Métodos Públicos para Cálculos de Rentabilidade (€/km, €/h) ---
 
     /** Calcula €/km. Retorna null se valor ou distância total forem inválidos/insuficientes. */
     fun calculateProfitability(): Double? {
-        val totalDistanceKm = distance.replace(",", ".").toDoubleOrNull()
-        val monetaryValue = value.replace(",", ".").toDoubleOrNull()
+        // USA A FUNÇÃO COM CORREÇÃO
+        val totalDistanceKm = distance.toDoubleOrNullWithCorrection()
+        val monetaryValue = value.toDoubleOrNullWithCorrection()
 
-        // Valida se temos dados suficientes e válidos
         if (totalDistanceKm == null || totalDistanceKm < MIN_VALID_EXTRACTED_DISTANCE ||
             monetaryValue == null || monetaryValue < MIN_VALID_VALUE) {
             Log.w(TAG, "[€/km Calc] Dados inválidos/insuficientes (Valor: $monetaryValue, Dist: $totalDistanceKm). Retornando null.")
@@ -44,7 +81,7 @@ data class OfferData(
 
         return try {
             val result = monetaryValue / totalDistanceKm
-            if (result.isFinite()) result else null // Evita Infinito/NaN
+            if (result.isFinite()) result else { Log.w(TAG,"[€/km Calc] Resultado não finito: $result"); null }
         } catch (e: Exception) {
             Log.e(TAG, "[€/km Calc] Erro na divisão: ${e.message}")
             null
@@ -53,17 +90,15 @@ data class OfferData(
 
     /** Calcula €/h. Retorna null se valor ou tempo total forem inválidos/insuficientes. */
     fun calculateValuePerHour(): Double? {
-        val totalTimeMinutes = duration.toIntOrNull() // Usa o total já calculado
-        val monetaryValue = value.replace(",", ".").toDoubleOrNull()
+        // USA A FUNÇÃO COM CORREÇÃO
+        val totalTimeMinutes = duration.toIntOrNullWithCorrection()
+        val monetaryValue = value.toDoubleOrNullWithCorrection()
 
-        // Valida se temos dados suficientes e válidos (permite tempo 0 se foi explicitamente calculado)
-        if (totalTimeMinutes == null || totalTimeMinutes < 0 || // Não pode ser negativo
+        if (totalTimeMinutes == null || totalTimeMinutes < 0 ||
             monetaryValue == null || monetaryValue < MIN_VALID_VALUE) {
             Log.w(TAG, "[€/h Calc] Dados inválidos/insuficientes (Valor: $monetaryValue, Tempo: $totalTimeMinutes). Retornando null.")
             return null
         }
-
-        // Evita divisão por zero se o tempo for exatamente 0
         if (totalTimeMinutes == 0) {
             Log.w(TAG, "[€/h Calc] Tempo total é zero, não é possível calcular €/h. Retornando null.")
             return null
@@ -72,7 +107,7 @@ data class OfferData(
         return try {
             val totalTimeHours = totalTimeMinutes / 60.0
             val result = monetaryValue / totalTimeHours
-            if (result.isFinite()) result else null // Evita Infinito/NaN
+            if (result.isFinite()) result else { Log.w(TAG,"[€/h Calc] Resultado não finito: $result"); null }
         } catch (e: Exception) {
             Log.e(TAG, "[€/h Calc] Erro na divisão: ${e.message}")
             null
@@ -83,9 +118,10 @@ data class OfferData(
 
     /** Calcula e atualiza os campos 'distance' e 'duration' totais. */
     fun updateCalculatedTotals() {
+        // Os métodos internos agora usam a correção
         this.distance = calculateTotalDistanceInternal()?.let { String.format(Locale.US, "%.1f", it) } ?: ""
         this.duration = calculateTotalTimeMinutesInternal()?.toString() ?: ""
-        Log.d(TAG, "updateCalculatedTotals: Dist='${this.distance}', Dur='${this.duration}'")
+        // Log.d(TAG, "updateCalculatedTotals: Dist='${this.distance}', Dur='${this.duration}'")
     }
 
     /** Retorna a distância total calculada ou null se impossível. */
@@ -95,15 +131,16 @@ data class OfferData(
     fun calculateTotalTimeMinutes(): Int? = calculateTotalTimeMinutesInternal()
 
 
-    // --- Métodos INTERNOS de Cálculo (Retornam null se dados insuficientes) ---
+    // --- Métodos INTERNOS de Cálculo (Usam funções com correção) ---
 
     /** Calcula Distância Total. Retorna null se ambas as partes forem inválidas. */
     private fun calculateTotalDistanceInternal(): Double? {
-        val pDist = pickupDistance.replace(",", ".").toDoubleOrNull()
-        val tDist = tripDistance.replace(",", ".").toDoubleOrNull()
+        // USA A FUNÇÃO COM CORREÇÃO
+        val pDist = pickupDistance.toDoubleOrNullWithCorrection()
+        val tDist = tripDistance.toDoubleOrNullWithCorrection()
 
-        val pDistValid = pDist != null && pDist >= MIN_VALID_EXTRACTED_DISTANCE
-        val tDistValid = tDist != null && tDist >= MIN_VALID_EXTRACTED_DISTANCE
+        val pDistValid = pDist != null && pDist >= 0.0 // Permite 0.0 aqui? Talvez mínimo > 0
+        val tDistValid = tDist != null && tDist >= 0.0
 
         return when {
             pDistValid && tDistValid -> pDist!! + tDist!! // Ambas válidas
@@ -115,10 +152,10 @@ data class OfferData(
 
     /** Calcula Tempo Total. Retorna null se ambas as partes forem inválidas. */
     private fun calculateTotalTimeMinutesInternal(): Int? {
-        val pDur = pickupDuration.toIntOrNull()
-        val tDur = tripDuration.toIntOrNull()
+        // USA A FUNÇÃO COM CORREÇÃO
+        val pDur = pickupDuration.toIntOrNullWithCorrection()
+        val tDur = tripDuration.toIntOrNullWithCorrection()
 
-        // Considera 0 minutos como válido se foi explicitamente extraído
         val pDurValid = pDur != null && pDur >= MIN_VALID_EXTRACTED_DURATION
         val tDurValid = tDur != null && tDur >= MIN_VALID_EXTRACTED_DURATION
 
@@ -128,36 +165,25 @@ data class OfferData(
             tDurValid -> tDur!! // Apenas viagem válida
             else -> null // Nenhuma parte válida
         }
-        // REMOVIDA a lógica de estimativa. Se uma parte faltar, o total será baseado apenas na parte existente,
-        // ou será null se ambas faltarem. Isso evita cálculos baseados em estimativas imprecisas.
     }
-
 
     /** Verifica se a oferta tem dados mínimos para ser considerada válida PARA CÁLCULOS. */
     fun isValidForCalculations(): Boolean {
-        // Recalcula os totais caso não tenham sido atualizados
         if (distance.isBlank() || duration.isBlank()) {
             updateCalculatedTotals()
         }
-        val hasValidValue = (value.replace(",", ".").toDoubleOrNull() ?: 0.0) >= MIN_VALID_VALUE
-        // Verifica se os totais calculados são válidos (não vazios/nulos)
-        val hasValidDistance = distance.isNotBlank()
-        val hasValidTime = duration.isNotBlank() && duration != "0" // Precisa de tempo > 0 para €/h
+        val hasValidValue = (value.toDoubleOrNullWithCorrection() ?: 0.0) >= MIN_VALID_VALUE
+        val hasValidDistance = (distance.toDoubleOrNullWithCorrection() ?: -1.0) >= 0.0 // Dist pode ser 0
+        val hasValidTime = (duration.toIntOrNullWithCorrection() ?: -1) > 0 // Tempo tem que ser > 0 para €/h
 
         val isValid = hasValidValue && hasValidDistance && hasValidTime
-
-        if (!isValid) {
-            Log.w(TAG, "[VALID_CALC?] OfferData INVÁLIDA para cálculos: ValorOK=$hasValidValue, DistOK=$hasValidDistance ('${distance}'), TempoOK=$hasValidTime ('${duration}')")
-        } else {
-            Log.d(TAG, "[VALID_CALC?] OfferData VÁLIDA para cálculos.")
-        }
+        // Log removido para não poluir
         return isValid
     }
 
     /** Verificação básica se a oferta parece ter sido extraída minimamente (tem valor). */
     fun isValid(): Boolean {
-        val hasValue = try { (value.replace(",", ".").toDoubleOrNull() ?: 0.0) >= MIN_VALID_VALUE } catch (e: Exception) { false }
-        // Poderia adicionar outras verificações básicas se necessário
+        val hasValue = (value.toDoubleOrNullWithCorrection() ?: 0.0) >= MIN_VALID_VALUE
         return hasValue
     }
 }
