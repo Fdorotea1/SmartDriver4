@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@drawable/menu_background_shape"
     android:padding="12dp"
-    android:elevation="8dp"> <!-- Sombra para destacar -->
+    android:elevation="8dp">
+    <!-- Comentários movidos para local válido -->
 
+    <!-- Item Tela Principal -->
     <TextView
         android:id="@+id/menu_item_main"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Tela Principal"
+        android:text="@string/menu_main_screen"
         android:textColor="@color/black"
         android:textSize="16sp"
         android:paddingTop="10dp"
@@ -21,18 +24,19 @@
         android:gravity="center_vertical"
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
-        android:drawableStart="@drawable/ic_home" /> <!-- Adicionar icone ic_home -->
+        android:drawableStart="@drawable/ic_home" /> <!-- Certifique-se que ic_home existe -->
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="@color/gray_divider"/>
+        android:background="@color/gray_divider"/> <!-- Certifique-se que gray_divider existe -->
 
+    <!-- Item Histórico -->
     <TextView
         android:id="@+id/menu_item_history"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Histórico"
+        android:text="@string/menu_history"
         android:textColor="@color/black"
         android:textSize="16sp"
         android:paddingTop="10dp"
@@ -42,18 +46,127 @@
         android:gravity="center_vertical"
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
-        android:drawableStart="@drawable/ic_history"/> <!-- Adicionar icone ic_history -->
+        android:drawableStart="@drawable/ic_history"/> <!-- Certifique-se que ic_history existe -->
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="@color/gray_divider"/>
+        android:background="@color/gray_divider"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"/>
 
+    <!-- *** NOVA SECÇÃO: CONTROLO DE TURNO *** -->
+
+    <TextView
+        android:id="@+id/textViewShiftStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="13sp"
+        android:textStyle="italic"
+        android:gravity="center_horizontal"
+        android:layout_marginBottom="4dp"
+        android:textColor="?android:attr/textColorSecondary"
+        tools:text="Turno Pausado"
+        android:text="@string/shift_status_none"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="4dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/shift_timer_label"
+            android:textSize="14sp"
+            android:textColor="?android:attr/textColorPrimary"/>
+
+        <TextView
+            android:id="@+id/textViewShiftTimer"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="?android:attr/textColorPrimary"
+            tools:text="01:23:45"
+            android:text="00:00:00"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/shift_average_label"
+            android:textSize="14sp"
+            android:textColor="?android:attr/textColorPrimary"/>
+
+        <TextView
+            android:id="@+id/textViewShiftAveragePerHour"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="?android:attr/textColorPrimary"
+            tools:text="15.8 €/h"
+            android:text="-- €/h"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <!-- Botão Principal (Iniciar/Pausar/Retomar) -->
+        <Button
+            android:id="@+id/buttonShiftToggle"
+            style="@style/Widget.AppCompat.Button.Small"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:text="@string/shift_action_start"/>
+
+        <!-- Botão Terminar Turno (visibilidade controlada) -->
+        <Button
+            android:id="@+id/buttonShiftEnd"
+            style="@style/Widget.AppCompat.Button.Small"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:visibility="gone"
+        tools:visibility="visible"
+        android:text="@string/shift_action_end"/>
+
+    </LinearLayout>
+
+    <!-- *** FIM DA SECÇÃO DE TURNO *** -->
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/gray_divider"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Item Desligar -->
     <TextView
         android:id="@+id/menu_item_shutdown"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Desligar Aplicação"
+        android:text="@string/menu_shutdown"
         android:textColor="@color/design_default_color_error"
     android:textSize="16sp"
     android:paddingTop="10dp"

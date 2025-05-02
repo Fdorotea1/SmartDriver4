@@ -2,16 +2,20 @@ package com.example.smartdriver.overlay
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Resources // <<< ADICIONAR IMPORT
+import android.os.Build // <<< ADICIONAR IMPORT
 import android.util.AttributeSet
 import android.util.Log
 import android.view.LayoutInflater
+import android.view.View
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.example.smartdriver.HistoryActivity
-import com.example.smartdriver.MainActivity // Import MainActivity
+import com.example.smartdriver.MainActivity
 import com.example.smartdriver.R
-import com.example.smartdriver.ScreenCaptureService
 
 class MenuView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
@@ -19,80 +23,119 @@ class MenuView @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "MenuView"
-        // Ação para enviar ao serviço para desligar (pode ser a mesma do MainActivity)
         const val ACTION_REQUEST_SHUTDOWN = "com.example.smartdriver.overlay.REQUEST_SHUTDOWN"
+        const val ACTION_TOGGLE_SHIFT_STATE = "com.example.smartdriver.overlay.TOGGLE_SHIFT_STATE"
+        const val ACTION_END_SHIFT = "com.example.smartdriver.overlay.END_SHIFT"
     }
 
+    // Referências às Views
+    private val mainItem: TextView
+    private val historyItem: TextView
+    private val shutdownItem: TextView
+    private val shiftStatusTextView: TextView
+    private val shiftTimerTextView: TextView
+    private val shiftAverageTextView: TextView
+    private val shiftToggleButton: Button
+    private val shiftEndButton: Button
+
     init {
-        // Infla o layout do menu
         LayoutInflater.from(context).inflate(R.layout.quick_menu_layout, this, true)
         orientation = VERTICAL
 
-        // Encontra os itens do menu (TextViews)
-        val mainItem: TextView = findViewById(R.id.menu_item_main)
-        val historyItem: TextView = findViewById(R.id.menu_item_history)
-        val shutdownItem: TextView = findViewById(R.id.menu_item_shutdown)
+        mainItem = findViewById(R.id.menu_item_main)
+        historyItem = findViewById(R.id.menu_item_history)
+        shutdownItem = findViewById(R.id.menu_item_shutdown)
+        shiftStatusTextView = findViewById(R.id.textViewShiftStatus)
+        shiftTimerTextView = findViewById(R.id.textViewShiftTimer)
+        shiftAverageTextView = findViewById(R.id.textViewShiftAveragePerHour)
+        shiftToggleButton = findViewById(R.id.buttonShiftToggle)
+        shiftEndButton = findViewById(R.id.buttonShiftEnd)
 
-        // Define os listeners de clique
-        mainItem.setOnClickListener {
-            Log.d(TAG, "Menu: Tela Principal clicado")
-            try {
-                val intent = Intent(context, MainActivity::class.java).apply {
-                    // FLAG_ACTIVITY_NEW_TASK é necessário para iniciar Activity de um Service
-                    // FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP traz a instância existente se houver
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-                context.startActivity(intent)
-                sendDismissMenuAction() // Pede para fechar o menu
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao iniciar MainActivity: ${e.message}", e)
-                Toast.makeText(context, "Erro ao abrir tela principal", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        historyItem.setOnClickListener {
-            Log.d(TAG, "Menu: Histórico clicado")
-            try {
-                val intent = Intent(context, HistoryActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK // Necessário iniciar de Service
-                }
-                context.startActivity(intent)
-                sendDismissMenuAction() // Pede para fechar o menu
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao iniciar HistoryActivity: ${e.message}", e)
-                Toast.makeText(context, "Erro ao abrir histórico", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        shutdownItem.setOnClickListener {
-            Log.d(TAG, "Menu: Desligar clicado")
-            // Envia uma ação para o OverlayService tratar o desligamento
-            val intent = Intent(context, OverlayService::class.java).apply {
-                action = ACTION_REQUEST_SHUTDOWN
-            }
-            try {
-                context.startService(intent)
-                // O menu será fechado pelo OverlayService após processar o shutdown
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao enviar $ACTION_REQUEST_SHUTDOWN: ${e.message}", e)
-            }
-        }
-
-        // Opcional: Adicionar um listener ao fundo para fechar o menu ao tocar fora
-        // Isso requereria tornar a janela do menu focusable e detetar perda de foco,
-        // ou adicionar um overlay de fundo transparente para capturar toques.
-        // Para simplificar, vamos fechar apenas ao clicar num item ou o serviço fecha.
+        // Listeners
+        mainItem.setOnClickListener { navigateToActivity(MainActivity::class.java) }
+        historyItem.setOnClickListener { navigateToActivity(HistoryActivity::class.java) }
+        shutdownItem.setOnClickListener { sendServiceAction(ACTION_REQUEST_SHUTDOWN) }
+        shiftToggleButton.setOnClickListener { sendServiceAction(ACTION_TOGGLE_SHIFT_STATE) }
+        shiftEndButton.setOnClickListener { sendServiceAction(ACTION_END_SHIFT) }
     }
 
-    // Envia ação para o OverlayService fechar este menu
-    private fun sendDismissMenuAction() {
+    // --- Funções Públicas para Atualizar a UI ---
+
+    fun updateShiftStatus(statusText: String, isActive: Boolean, isPaused: Boolean) {
+        shiftStatusTextView.text = statusText
+        updateShiftButtons(isActive, isPaused)
+    }
+
+    fun updateShiftTimer(timeText: String) {
+        shiftTimerTextView.text = timeText
+    }
+
+    fun updateShiftAverage(averageText: String) {
+        shiftAverageTextView.text = averageText
+    }
+
+    // --- Funções Auxiliares ---
+
+    private fun updateShiftButtons(isActive: Boolean, isPaused: Boolean) {
+        try { // Adiciona try-catch geral para robustez na UI
+            if (!isActive) {
+                shiftToggleButton.text = context.getString(R.string.shift_action_start)
+                shiftToggleButton.isEnabled = true
+                shiftEndButton.visibility = View.GONE
+                try { shiftToggleButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_start)) }
+                catch (e: Resources.NotFoundException) { Log.e(TAG, "Cor button_start não encontrada", e)}
+            } else {
+                shiftEndButton.visibility = View.VISIBLE
+                if (isPaused) {
+                    shiftToggleButton.text = context.getString(R.string.shift_action_resume)
+                    shiftToggleButton.isEnabled = true
+                    try { shiftToggleButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_resume)) }
+                    catch (e: Resources.NotFoundException) { Log.e(TAG, "Cor button_resume não encontrada", e)}
+                } else {
+                    shiftToggleButton.text = context.getString(R.string.shift_action_pause)
+                    shiftToggleButton.isEnabled = true
+                    try { shiftToggleButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_pause)) }
+                    catch (e: Resources.NotFoundException) { Log.e(TAG, "Cor button_pause não encontrada", e)}
+                }
+                try { shiftEndButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_end)) }
+                catch (e: Resources.NotFoundException) { Log.e(TAG, "Cor button_end não encontrada", e)}
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro inesperado em updateShiftButtons: ${e.message}", e)
+        }
+    }
+
+    private fun navigateToActivity(activityClass: Class<*>) {
+        Log.d(TAG, "Navegando para ${activityClass.simpleName}")
+        try {
+            val intent = Intent(context, activityClass).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            context.startActivity(intent)
+            sendDismissMenuAction()
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao iniciar ${activityClass.simpleName}: ${e.message}", e)
+            Toast.makeText(context, "Erro ao abrir ecrã", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun sendServiceAction(action: String) {
         val intent = Intent(context, OverlayService::class.java).apply {
-            action = OverlayService.ACTION_DISMISS_MENU // Ação para fechar
+            this.action = action
         }
         try {
-            context.startService(intent)
+            // *** USA Build para verificar versão ***
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao enviar ACTION_DISMISS_MENU: ${e.message}", e)
+            Log.e(TAG, "Erro ao enviar ação '$action' para OverlayService: ${e.message}", e)
         }
+    }
+
+    private fun sendDismissMenuAction() {
+        sendServiceAction(OverlayService.ACTION_DISMISS_MENU)
     }
 }

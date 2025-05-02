@@ -11,6 +11,12 @@
     <color name="gray_inactive">#888888</color>
     <color name="splash_background">#FFFFFF</color> <!-- Exemplo -->
 
+    <!-- *** NOVAS CORES PARA BOTÕES DE TURNO *** -->
+    <color name="button_start">#4CAF50</color> <!-- Verde -->
+    <color name="button_pause">#FF9800</color> <!-- Laranja -->
+    <color name="button_resume">#2196F3</color> <!-- Azul -->
+    <color name="button_end">#F44336</color>   <!-- Vermelho -->
+
     <!-- Cores da Avaliação (Exemplos, ajuste se necessário) -->
     <color name="rating_good">#4CAF50</color> <!-- Verde -->
     <color name="rating_medium">#FFC107</color> <!-- Amarelo/Laranja -->
