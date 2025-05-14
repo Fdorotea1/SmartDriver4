@@ -28,5 +28,4 @@
     <color name="history_indicator_medium">#FFF59D</color> <!-- Amarelo claro -->
     <color name="history_indicator_poor">#EF9A9A</color> <!-- Vermelho claro -->
     <color name="history_indicator_unknown">#E0E0E0</color> <!-- Cinza claro -->
-
 </resources>

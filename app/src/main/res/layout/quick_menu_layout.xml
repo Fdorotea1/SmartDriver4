@@ -4,16 +4,19 @@
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="@drawable/menu_background_shape"
+    android:background="?android:attr/colorBackground"
     android:padding="12dp"
-    android:elevation="8dp">
+    android:elevation="8dp"
+    tools:ignore="HardcodedText,UseCompatTextViewDrawableXml" > <!-- <<< VERIFICA ESTE '>' DE FECHO -->
+
+    <!-- Conteúdo do LinearLayout começa aqui -->
 
     <TextView
         android:id="@+id/menu_item_main"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/menu_main_screen"
-        android:textColor="@color/black"
+        android:textColor="?android:attr/textColorPrimary"
         android:textSize="16sp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
@@ -22,19 +25,19 @@
         android:gravity="center_vertical"
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
-        android:drawableStart="@drawable/ic_home" />
+        android:drawableStart="@android:drawable/ic_menu_manage" />
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="@color/gray_divider"/>
+        android:background="?android:attr/listDivider"/>
 
     <TextView
         android:id="@+id/menu_item_history"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/menu_history"
-        android:textColor="@color/black"
+        android:textColor="?android:attr/textColorPrimary"
         android:textSize="16sp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
@@ -43,12 +46,12 @@
         android:gravity="center_vertical"
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
-        android:drawableStart="@drawable/ic_history"/>
+        android:drawableStart="@android:drawable/ic_menu_recent_history"/>
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="@color/gray_divider"
+        android:background="?android:attr/listDivider"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp"/>
 
@@ -101,20 +104,23 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/shift_earnings_label" android:textSize="14sp"
+            android:text="@string/shift_time_to_target_label"
+            android:textSize="14sp"
             android:textColor="?android:attr/textColorPrimary"/>
 
         <TextView
-            android:id="@+id/textViewShiftEarnings" android:layout_width="0dp"
+            android:id="@+id/textViewTimeToTarget"
+            android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
             android:gravity="end"
             android:textSize="14sp"
             android:textStyle="bold"
             android:textColor="?android:attr/textColorPrimary"
-            tools:text="125.50 €"
-            android:text="0.00 €"/>
+            tools:text="02:30:00"
+            android:text="--:--:--"/>
     </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -149,7 +155,7 @@
 
         <Button
             android:id="@+id/buttonShiftToggle"
-            style="@style/Widget.AppCompat.Button.Small"
+            style="?android:attr/buttonStyleSmall"
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
@@ -158,7 +164,7 @@
 
         <Button
             android:id="@+id/buttonShiftEnd"
-            style="@style/Widget.AppCompat.Button.Small"
+            style="?android:attr/buttonStyleSmall"
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
@@ -171,7 +177,7 @@
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="@color/gray_divider"
+        android:background="?android:attr/listDivider"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp"/>
 
@@ -180,7 +186,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/menu_shutdown"
-        android:textColor="@color/design_default_color_error"
+        android:textColor="@android:color/holo_red_dark"
         android:textSize="16sp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
@@ -189,6 +195,6 @@
         android:gravity="center_vertical"
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
-        android:drawableStart="@drawable/ic_shutdown"/>
+        android:drawableStart="@android:drawable/ic_menu_close_clear_cancel"/>
 
 </LinearLayout>

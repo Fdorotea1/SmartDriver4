@@ -1,51 +1,71 @@
 <resources>
     <string name="app_name">SmartDriver</string>
     <string name="splash_logo_description">Logotipo do SmartDriver</string>
-
     <string name="settings_title">Configurações do SmartDriver</string>
-    <string name="title_activity_settings">@string/settings_title</string> <string name="service_inactive">Serviço inativo. Clique para ativar.</string>
+    <string name="service_inactive">Serviço inativo. Clique para ativar.</string>
     <string name="service_active">Serviço ativo e monitorando</string>
-    <string name="settings_button">CONFIGURAÇÕES AVANÇADAS</string> <string name="service_button">Configurar Serviço de Acessibilidade</string>
+    <string name="settings_button">CONFIGURAÇÕES AVANÇADAS</string>
+    <string name="service_button">Configurar Serviço de Acessibilidade</string>
     <string name="overlay_button">Permitir overlay</string>
     <string name="capture_button">Iniciar Captura de Tela</string>
-    <string name="shutdown_button">ENCERRAR APLICATIVO</string> <string name="activate_overlay_switch">Ativar semáforo de ofertas</string>
-    <string name="save_images_switch_label">Salvar capturas de tela na galeria</string> <string name="app_status_on">Assistente SmartDriver ATIVO</string>
+    <string name="shutdown_button">ENCERRAR APLICATIVO</string>
+    <string name="activate_overlay_switch">Ativar semáforo de ofertas</string>
+    <string name="save_images_switch_label">Salvar capturas de tela na galeria</string>
+    <string name="app_status_on">Assistente SmartDriver ATIVO</string>
     <string name="app_status_off">Assistente SmartDriver INATIVO</string>
-    <string name="main_activity_instructions_title">❓ INSTRUÇÕES DE CONFIGURAÇÃO</string> <string name="main_activity_instructions_text">Siga estes passos na ordem para configurar o SmartDriver:\n\n1. Ative o serviço de acessibilidade.\n2. Permita o overlay.\n3. Conceda permissão de captura.\n4. Ative o Assistente SmartDriver.\n\nDepois, abra o app Uber Driver.</string> <string name="button_history">Histórico</string> <string name="threshold_section_title">Limiares de Avaliação</string> <string name="good_km_hint">€/km Bom (Ex: 1.20)</string>
+    <string name="main_activity_instructions_title">❓ INSTRUÇÕES DE CONFIGURAÇÃO</string>
+    <string name="main_activity_instructions_text">Siga estes passos na ordem para configurar o SmartDriver:\n\n1. Ative o serviço de acessibilidade.\n2. Permita o overlay.\n3. Conceda permissão de captura.\n4. Ative o Assistente SmartDriver.\n\nDepois, abra o app Uber Driver.</string>
+    <string name="button_history">Histórico</string>
+    <string name="threshold_section_title">Limiares de Avaliação</string>
+    <string name="good_km_hint">€/km Bom (Ex: 1.20)</string>
     <string name="poor_km_hint">€/km Mau (Ex: 0.70)</string>
     <string name="good_hour_hint">€/h Bom (Ex: 15.0)</string>
     <string name="poor_hour_hint">€/h Mau (Ex: 8.0)</string>
-    <string name="semaphore_section_title">Aparência do Overlay</string> <string name="font_size">Tamanho da Fonte</string>
+    <string name="semaphore_section_title">Aparência do Overlay</string>
+    <string name="font_size">Tamanho da Fonte</string>
     <string name="transparency">Transparência</string>
-    <string name="font_size_default_text">100%</string> <string name="transparency_default_text">15% transp</string> <string name="other_settings_title">Outras Configurações</string>
+    <string name="font_size_default_text">100%</string>
+    <string name="transparency_default_text">15% transp</string>
+    <string name="other_settings_title">Outras Configurações</string>
     <string name="save_screenshots">Salvar capturas de tela para debug</string>
-    <string name="save_settings">GUARDAR</string> <string name="reset_defaults">REPOR PADRÕES</string> <string name="preview_overlay">Pré-visualização</string>
-
+    <string name="save_settings">GUARDAR</string>
+    <string name="reset_defaults">REPOR PADRÕES</string>
+    <string name="preview_overlay">Pré-visualização</string>
     <string name="history_empty">Histórico vazio.</string>
-
     <string name="menu_main_screen">Ecrã Principal</string>
     <string name="menu_history">Histórico</string>
     <string name="menu_shutdown">Desligar App</string>
-
     <string name="accessibility_service_description">O SmartDriver monitora as ofertas de viagem em aplicativos como Uber para calcular sua rentabilidade em tempo real. Isso permite que você decida rapidamente se uma oferta vale a pena aceitar.</string>
-
     <string name="shift_status_none">Nenhum Turno Iniciado</string>
     <string name="shift_status_active">Turno Ativo</string>
     <string name="shift_status_paused">Turno Pausado</string>
     <string name="shift_timer_label">Tempo Turno:</string>
-    <string name="shift_earnings_label">Ganhos Estimados:</string> <string name="shift_average_label">Média Turno:</string>
+    <string name="shift_average_label">Média Turno:</string>
     <string name="shift_action_start">Iniciar Turno</string>
     <string name="shift_action_pause">Pausar Turno</string>
     <string name="shift_action_resume">Retomar Turno</string>
     <string name="shift_action_end">Terminar Turno</string>
-
     <string name="confirm_dialog_yes">Sim</string>
     <string name="confirm_dialog_no">Não</string>
-
     <string name="confirm_shutdown_title">Desligar Aplicação?</string>
     <string name="confirm_shutdown_message">Tem a certeza que deseja encerrar o SmartDriver e todos os seus serviços?</string>
-
     <string name="confirm_end_shift_title">Terminar Turno?</string>
     <string name="confirm_end_shift_message">Tem a certeza que deseja terminar o turno atual? Os dados serão guardados.</string>
-
+    <string name="notification_overlay_ready">SmartDriver pronto</string>
+    <string name="notification_channel_description">Notificações do serviço SmartDriver</string>
+    <string name="notification_tracking_trip">Acompanhando Viagem...</string>
+    <string name="notification_shift_active">Turno ativo (%1$s)</string>
+    <string name="notification_shift_paused">Turno pausado</string>
+    <string name="shift_time_to_target_label">Tempo p/ Meta:</string>
+    <string name="shift_target_not_set">Meta não definida</string>
+    <string name="shift_target_reached">Meta Atingida!</string>
+    <string name="shift_calculating_time_to_target">Calcular...</string>
+    <string name="shift_calculating_average">-- €/h (calc..)</string>
+    <string name="dialog_set_shift_target_title">Definir Meta de Ganhos (€)</string>
+    <string name="dialog_shift_target_hint">Ex: 100.00</string>
+    <string name="dialog_set_target_button_ok">Definir</string>
+    <string name="dialog_set_target_button_cancel">Cancelar</string>
+    <string name="toast_target_set_to">Meta definida para: %1$.2f €</string>
+    <string name="toast_invalid_target_value">Valor da meta inválido.</string>
+    <string name="toast_shift_already_active_set_target_info">Termine o turno atual para definir uma nova meta.</string>
 </resources>
