@@ -1,13 +1,15 @@
 package com.example.smartdriver.overlay
 
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.content.res.Resources // <<< ADICIONAR IMPORT
-import android.os.Build // <<< ADICIONAR IMPORT
+import android.content.res.Resources
+import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -16,6 +18,8 @@ import androidx.core.content.ContextCompat
 import com.example.smartdriver.HistoryActivity
 import com.example.smartdriver.MainActivity
 import com.example.smartdriver.R
+// Importa OverlayService para aceder às suas constantes
+import com.example.smartdriver.overlay.OverlayService // Garanta que esta importação existe
 
 class MenuView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
@@ -23,9 +27,7 @@ class MenuView @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "MenuView"
-        const val ACTION_REQUEST_SHUTDOWN = "com.example.smartdriver.overlay.REQUEST_SHUTDOWN"
-        const val ACTION_TOGGLE_SHIFT_STATE = "com.example.smartdriver.overlay.TOGGLE_SHIFT_STATE"
-        const val ACTION_END_SHIFT = "com.example.smartdriver.overlay.END_SHIFT"
+        // As ações são definidas no OverlayService
     }
 
     // Referências às Views
@@ -34,6 +36,7 @@ class MenuView @JvmOverloads constructor(
     private val shutdownItem: TextView
     private val shiftStatusTextView: TextView
     private val shiftTimerTextView: TextView
+    private val shiftEarningsTextView: TextView // <<< NOVA REFERÊNCIA
     private val shiftAverageTextView: TextView
     private val shiftToggleButton: Button
     private val shiftEndButton: Button
@@ -47,6 +50,7 @@ class MenuView @JvmOverloads constructor(
         shutdownItem = findViewById(R.id.menu_item_shutdown)
         shiftStatusTextView = findViewById(R.id.textViewShiftStatus)
         shiftTimerTextView = findViewById(R.id.textViewShiftTimer)
+        shiftEarningsTextView = findViewById(R.id.textViewShiftEarnings) // <<< OBTER REFERÊNCIA
         shiftAverageTextView = findViewById(R.id.textViewShiftAveragePerHour)
         shiftToggleButton = findViewById(R.id.buttonShiftToggle)
         shiftEndButton = findViewById(R.id.buttonShiftEnd)
@@ -54,12 +58,76 @@ class MenuView @JvmOverloads constructor(
         // Listeners
         mainItem.setOnClickListener { navigateToActivity(MainActivity::class.java) }
         historyItem.setOnClickListener { navigateToActivity(HistoryActivity::class.java) }
-        shutdownItem.setOnClickListener { sendServiceAction(ACTION_REQUEST_SHUTDOWN) }
-        shiftToggleButton.setOnClickListener { sendServiceAction(ACTION_TOGGLE_SHIFT_STATE) }
-        shiftEndButton.setOnClickListener { sendServiceAction(ACTION_END_SHIFT) }
+
+        shutdownItem.setOnClickListener {
+            showConfirmationDialog(
+                title = context.getString(R.string.confirm_shutdown_title),
+                message = context.getString(R.string.confirm_shutdown_message),
+                positiveAction = {
+                    sendServiceAction(OverlayService.ACTION_REQUEST_SHUTDOWN)
+                    sendDismissMenuAction()
+                },
+                negativeAction = {
+                    sendDismissMenuAction()
+                }
+            )
+        }
+
+        shiftToggleButton.setOnClickListener {
+            sendServiceAction(OverlayService.ACTION_TOGGLE_SHIFT_STATE)
+        }
+
+        shiftEndButton.setOnClickListener {
+            showConfirmationDialog(
+                title = context.getString(R.string.confirm_end_shift_title),
+                message = context.getString(R.string.confirm_end_shift_message),
+                positiveAction = {
+                    sendServiceAction(OverlayService.ACTION_END_SHIFT)
+                }
+                // negativeAction = {} // Opcional
+            )
+        }
     }
 
-    // --- Funções Públicas para Atualizar a UI ---
+    private fun showConfirmationDialog(
+        title: String,
+        message: String,
+        positiveAction: () -> Unit,
+        negativeAction: (() -> Unit)? = null
+    ) {
+        val builder = AlertDialog.Builder(context)
+            .setTitle(title)
+            .setMessage(message)
+            .setIcon(android.R.drawable.ic_dialog_alert)
+            .setPositiveButton(context.getString(R.string.confirm_dialog_yes)) { dialog, _ ->
+                positiveAction.invoke()
+                dialog.dismiss()
+            }
+            .setNegativeButton(context.getString(R.string.confirm_dialog_no)) { dialog, _ ->
+                negativeAction?.invoke()
+                dialog.dismiss()
+            }
+            .setOnCancelListener {
+                negativeAction?.invoke()
+            }
+        try {
+            val dialog = builder.create()
+            val window = dialog.window
+            if (window != null) {
+                val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+                }
+                window.setType(windowType)
+            }
+            dialog.show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao mostrar diálogo de confirmação: ${e.message}", e)
+            Toast.makeText(context, "Erro ao mostrar diálogo", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     fun updateShiftStatus(statusText: String, isActive: Boolean, isPaused: Boolean) {
         shiftStatusTextView.text = statusText
@@ -70,14 +138,18 @@ class MenuView @JvmOverloads constructor(
         shiftTimerTextView.text = timeText
     }
 
+    // <<< NOVO MÉTODO PARA ATUALIZAR GANHOS >>>
+    fun updateShiftEarnings(earningsText: String) {
+        shiftEarningsTextView.text = earningsText
+    }
+    // <<< FIM DO NOVO MÉTODO >>>
+
     fun updateShiftAverage(averageText: String) {
         shiftAverageTextView.text = averageText
     }
 
-    // --- Funções Auxiliares ---
-
     private fun updateShiftButtons(isActive: Boolean, isPaused: Boolean) {
-        try { // Adiciona try-catch geral para robustez na UI
+        try {
             if (!isActive) {
                 shiftToggleButton.text = context.getString(R.string.shift_action_start)
                 shiftToggleButton.isEnabled = true
@@ -124,7 +196,6 @@ class MenuView @JvmOverloads constructor(
             this.action = action
         }
         try {
-            // *** USA Build para verificar versão ***
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
