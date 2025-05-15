@@ -34,6 +34,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.text.DecimalFormat
 import java.text.NumberFormat
+import java.util.Date // IMPORT ADICIONADO
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -173,7 +174,7 @@ class OverlayService : Service() {
             ACTION_UPDATE_SETTINGS -> handleUpdateSettings(intent)
             ACTION_SHOW_QUICK_MENU -> handleShowQuickMenu()
             ACTION_DISMISS_MENU -> handleDismissMenu()
-            ACTION_SHOW_DROP_ZONE -> { // Removida duplicação e bloco adicionado
+            ACTION_SHOW_DROP_ZONE -> {
                 Log.d(TAG, "onStartCommand: Recebido ACTION_SHOW_DROP_ZONE")
                 addDropZoneView()
             }
@@ -182,7 +183,7 @@ class OverlayService : Service() {
                 val touchUpY = intent.getFloatExtra(EXTRA_UP_Y, -1f)
                 Log.d(TAG, "onStartCommand: Recebido HIDE_DROP_ZONE_AND_CHECK_DROP. Coords:($touchUpX, $touchUpY)")
                 checkDropAndHideZone(touchUpX, touchUpY)
-            } // CORRIGIDO: '}' estava em falta aqui
+            }
             ACTION_REQUEST_SHUTDOWN -> handleShutdownRequest()
             ACTION_TOGGLE_SHIFT_STATE -> handleToggleShiftState()
             ACTION_END_SHIFT -> handleEndShift()
@@ -256,32 +257,21 @@ class OverlayService : Service() {
     @SuppressLint("ClickableViewAccessibility") private fun createFloatingIconTouchListener(): View.OnTouchListener { var iX = 0; var iY = 0; var iTX = 0f; var iTY = 0f; var sT = 0L; var isD = false; return View.OnTouchListener { v, e -> when (e.action) { MotionEvent.ACTION_DOWN -> { iX = floatingIconLayoutParams.x; iY = floatingIconLayoutParams.y; iTX = e.rawX; iTY = e.rawY; sT = System.currentTimeMillis(); isD = false; true } MotionEvent.ACTION_MOVE -> { val dX = abs(e.rawX - iTX); val dY = abs(e.rawY - iTY); if (dX > touchSlop || dY > touchSlop) isD = true; if (isD) { val nX = iX + (e.rawX - iTX).toInt(); val nY = iY + (e.rawY - iTY).toInt(); val sW = Resources.getSystem().displayMetrics.widthPixels; val sH = Resources.getSystem().displayMetrics.heightPixels; floatingIconLayoutParams.x = nX.coerceIn(0, sW - v.width); floatingIconLayoutParams.y = nY.coerceIn(0, sH - v.height); try { if (isFloatingIconAdded) windowManager?.updateViewLayout(floatingIconView, floatingIconLayoutParams) } catch (ex: Exception) {} }; true } MotionEvent.ACTION_UP -> { if (!isD && (System.currentTimeMillis() - sT) < ViewConfiguration.getTapTimeout()) { if (!isQuickMenuAdded) handleShowQuickMenu() else handleDismissMenu(); v.performClick() } else if (isD && isQuickMenuAdded) { try { menuLayoutParams.x = floatingIconLayoutParams.x; menuLayoutParams.y = floatingIconLayoutParams.y + v.height + (5 * resources.displayMetrics.density).toInt(); windowManager?.updateViewLayout(quickMenuView, menuLayoutParams) } catch (ex: Exception) {} }; isD = false; true } else -> false } } }
     @SuppressLint("ClickableViewAccessibility") private fun addDropZoneView() { if (windowManager == null || dropZoneLayoutParams == null) { Log.w(TAG, "DropZone não pode ser adicionada."); return }; Log.d(TAG, "addDropZoneView: Tentando. isAdded=$isDropZoneViewAdded, viewNull=${dropZoneView == null}"); if (isDropZoneViewAdded && dropZoneView != null) { dropZoneView?.visibility = View.VISIBLE; Log.d(TAG, "DropZoneView já estava adicionada, tornando visível."); return }; if (dropZoneView == null) { dropZoneView = ImageView(this).apply { setImageResource(android.R.drawable.ic_menu_close_clear_cancel); alpha = 0.85f; Log.d(TAG, "DropZoneView ImageView criada.") } }; try { dropZoneView?.visibility = View.VISIBLE; windowManager?.addView(dropZoneView, dropZoneLayoutParams); isDropZoneViewAdded = true; Log.i(TAG, "DropZoneView ADICIONADA ao WindowManager.") } catch (e: Exception) { Log.e(TAG, "Erro add DropZoneView: ${e.message}", e); isDropZoneViewAdded = false; } }
     private fun removeDropZoneView() { Log.d(TAG, "removeDropZoneView: Tentando. isAdded=$isDropZoneViewAdded, viewNull=${dropZoneView == null}"); if (!isDropZoneViewAdded || dropZoneView == null || windowManager == null) return; dropZoneView?.visibility = View.GONE; Log.d(TAG, "DropZoneView tornada GONE.") }
-    // Em OverlayService.kt
+
     private fun checkDropAndHideZone(touchUpX: Float, touchUpY: Float) {
         var droppedOnTarget = false
         Log.d(TAG, "checkDropAndHideZone: INICIADO. touchUpX=$touchUpX, touchUpY=$touchUpY, isDropZoneAdded=$isDropZoneViewAdded, dropZoneViewNull=${dropZoneView == null}")
 
-        // Garante que a dropZoneView está visível antes de obter o seu Rect
         if (isDropZoneViewAdded && dropZoneView != null) {
-            dropZoneView?.visibility = View.VISIBLE // Força a visibilidade aqui para garantir
-
-            // Pequeno delay para dar tempo ao WindowManager de processar a visibilidade e o layout
-            // Isto é um workaround e pode não ser o ideal, mas pode ajudar a diagnosticar.
-            // Idealmente, não precisaríamos disto.
-            // mainHandler.postDelayed({ // Se o problema persistir, podemos tentar este delay
+            dropZoneView?.visibility = View.VISIBLE
 
             val dropZoneRect = Rect()
-            // Tenta obter a localização no ecrã
             val dropZoneLocation = IntArray(2)
             dropZoneView!!.getLocationOnScreen(dropZoneLocation)
 
-            // Constrói o Rect a partir da localização e dimensões da view
-            // As dimensões vêm dos LayoutParams ou da própria view após ser medida
             val dzWidth = dropZoneView!!.width
             val dzHeight = dropZoneView!!.height
 
-            // Se width/height forem 0, significa que a view não foi medida/layoutada ainda.
-            // Neste caso, usa as dimensões dos LayoutParams
             val finalDzWidth = if (dzWidth > 0) dzWidth else dropZoneLayoutParams?.width ?: 0
             val finalDzHeight = if (dzHeight > 0) dzHeight else dropZoneLayoutParams?.height ?: 0
 
@@ -306,11 +296,9 @@ class OverlayService : Service() {
                     }
                 }
             } else {
-                // Logs de warning como antes
                 if (!isTrackingOverlayAdded || trackingOverlayView == null) Log.w(TAG, "checkDropAndHideZone: TrackingOverlayView não adicionado/nulo.")
                 if (touchUpX < 0 || touchUpY < 0) Log.w(TAG, "checkDropAndHideZone: Coordenadas de ACTION_UP inválidas.")
             }
-            // }, 50) // Fim do postDelayed (se usares)
         } else {
             Log.w(TAG, "checkDropAndHideZone: DropZone não está adicionada ou é nula.")
         }
@@ -338,10 +326,74 @@ class OverlayService : Service() {
     private fun startShiftTimer() { shiftTimerRunnable?.let { shiftTimerHandler.removeCallbacks(it); shiftTimerHandler.post(it) } ?: run { setupShiftTimerRunnable(); shiftTimerHandler.post(shiftTimerRunnable!!) }; updateShiftNotification() }
     private fun stopShiftTimer() { shiftTimerRunnable?.let { shiftTimerHandler.removeCallbacks(it) }; updateShiftNotification() }
     private fun calculateCurrentWorkedTimeMillis(): Long { if (!isShiftActive) return 0L; var cWT = shiftAccumulatedWorkedTimeMillis; if (!isShiftPaused) { val tS = System.currentTimeMillis() - shiftLastPauseOrResumeTimeMillis; if (tS > 0) cWT += tS }; return max(0L, cWT) }
-    private fun formatDuration(millis: Long): String { if (millis < 0) return "00:00:00"; val h = TimeUnit.MILLISECONDS.toHours(millis); val m = TimeUnit.MILLISECONDS.toMinutes(millis) % 60; val s = TimeUnit.MILLISECONDS.toSeconds(millis) % 60;return String.format(Locale.getDefault(), "%02d:%02d",h,m) }
+    private fun formatDuration(millis: Long): String { if (millis < 0) return "00:00:00"; val h = TimeUnit.MILLISECONDS.toHours(millis); val m = TimeUnit.MILLISECONDS.toMinutes(millis) % 60; val s = TimeUnit.MILLISECONDS.toSeconds(millis) % 60;return String.format(Locale.getDefault(), "%02d:%02d",h,m) } // TODO: Rever formatação para incluir segundos se necessário ou HH:mm
     private fun getNumericShiftAveragePerHourValue(cWTMParam: Long? = null): Double? { if (!isShiftActive) return null; val tRE = shiftTotalEarnings; val wM = cWTMParam ?: calculateCurrentWorkedTimeMillis(); if (wM < 5000L) return if (tRE > 0.0) null else 0.0; val wH = wM / 3600000.0; if (wH <= 0.0) return if (tRE > 0.0) null else 0.0; return tRE / wH }
     private fun calculateCurrentShiftAveragePerHourString(avgNum: Double?): String { return when { avgNum != null && avgNum.isFinite() -> "${averageDecimalFormat.format(avgNum)} €/h"; isShiftActive && shiftTotalEarnings > 0.0 && calculateCurrentWorkedTimeMillis() < 5000L -> getString(R.string.shift_calculating_average); isShiftActive && avgNum == 0.0 -> "0.0 €/h"; else -> "-- €/h" } }
     private fun calculateAndFormatTimeToTarget(): String { if (!isShiftActive) return "--:--:--"; if (shiftTargetEarnings <= 0.0) return getString(R.string.shift_target_not_set); val gM = shiftTargetEarnings - shiftTotalEarnings; if (gM <= 0.0) return getString(R.string.shift_target_reached); val cAvgPH = getNumericShiftAveragePerHourValue(); return if (cAvgPH != null && cAvgPH > 0.0 && cAvgPH.isFinite()) { val hTT = gM / cAvgPH; val mTT = (hTT * 3600000.0).toLong(); if (mTT < 0) getString(R.string.shift_target_reached) else formatDuration(mTT) } else { getString(R.string.shift_calculating_time_to_target) } }
-    private fun updateMenuViewShiftUI() { quickMenuView?.let { menu -> val sTK = if (!isShiftActive) R.string.shift_status_none else if (isShiftPaused) R.string.shift_status_paused else R.string.shift_status_active; val wTM = calculateCurrentWorkedTimeMillis(); val fT = formatDuration(wTM); val avgNum = getNumericShiftAveragePerHourValue(wTM); val avgStr = calculateCurrentShiftAveragePerHourString(avgNum); val tTTStr = calculateAndFormatTimeToTarget(); Log.d(TAG, "updateMenuViewShiftUI: TMeta=$tTTStr, Meta=${currencyFormatter.format(shiftTargetEarnings)}, GReais=${currencyFormatter.format(shiftTotalEarnings)}"); menu.updateShiftStatus(getString(sTK), isShiftActive, isShiftPaused); menu.updateShiftTimer(fT); menu.updateTimeToTarget(tTTStr); menu.updateShiftAverage(avgStr) } }
-    private fun updateShiftNotification() { val txt = when { isCurrentlyTracking -> getString(R.string.notification_tracking_trip); isShiftActive && !isShiftPaused -> getString(R.string.notification_shift_active, formatDuration(calculateCurrentWorkedTimeMillis())); isShiftActive && isShiftPaused -> getString(R.string.notification_shift_paused); else -> getString(R.string.notification_overlay_ready) }; updateNotification(txt, isCurrentlyTracking || (isShiftActive && !isShiftPaused)) }
+
+    private fun updateMenuViewShiftUI() {
+        quickMenuView?.let { menu ->
+            val sTK = if (!isShiftActive) R.string.shift_status_none else if (isShiftPaused) R.string.shift_status_paused else R.string.shift_status_active
+            val wTM = calculateCurrentWorkedTimeMillis()
+            val fT = formatDuration(wTM)
+            val avgNum = getNumericShiftAveragePerHourValue(wTM)
+            val avgStr = calculateCurrentShiftAveragePerHourString(avgNum)
+            val tTTStr = calculateAndFormatTimeToTarget()
+            val expectedEndTime: String = calculateAndFormatExpectedEndTime()
+
+            Log.d(
+                TAG,
+                "updateMenuViewShiftUI: TMeta=$tTTStr, Meta=${currencyFormatter.format(shiftTargetEarnings)}, GReais=${currencyFormatter.format(shiftTotalEarnings)}, FimPrevisto=$expectedEndTime"
+            )
+            menu.updateShiftStatus(getString(sTK), isShiftActive, isShiftPaused)
+            menu.updateShiftTimer(fT)
+            menu.updateTimeToTarget(tTTStr)
+            menu.updateShiftAverage(avgStr)
+            menu.updateExpectedEndTime(expectedEndTime)
+        }
+    }
+
+    private fun updateShiftNotification() {
+        val txt = when {
+            isCurrentlyTracking -> getString(R.string.notification_tracking_trip)
+            isShiftActive && !isShiftPaused -> getString(R.string.notification_shift_active, formatDuration(calculateCurrentWorkedTimeMillis()))
+            isShiftActive && isShiftPaused -> getString(R.string.notification_shift_paused)
+            else -> getString(R.string.notification_overlay_ready)
+        }
+        updateNotification(txt, isCurrentlyTracking || (isShiftActive && !isShiftPaused))
+    }
+
+    // -------- FUNÇÃO MOVIDA PARA DENTRO DA CLASSE --------
+    private fun calculateAndFormatExpectedEndTime(): String {
+        if (!isShiftActive) return getString(R.string.expected_end_time_placeholder) // Ex: "--:--" ou "Turno não ativo"
+        if (shiftTargetEarnings <= 0.0) return getString(R.string.expected_end_time_placeholder) // Ex: "Meta não definida"
+
+        val ganhosFaltam = shiftTargetEarnings - shiftTotalEarnings
+        if (ganhosFaltam <= 0.0) return getString(R.string.shift_target_reached) // Ex: "Meta Atingida!"
+
+        val avgPH = getNumericShiftAveragePerHourValue()
+        if (avgPH == null || avgPH <= 0.0 || !avgPH.isFinite()) {
+            // Se a média não puder ser calculada ou for zero/negativa, não podemos prever.
+            return getString(R.string.expected_end_time_placeholder) // Ex: "Calculando..." ou "--:--"
+        }
+
+        val horasRestantes = ganhosFaltam / avgPH
+        val millisRestantes = (horasRestantes * 3600000.0).toLong()
+
+        // Adicionar uma verificação para millisRestantes, caso seja um valor excessivamente grande ou negativo inesperado
+        if (millisRestantes < 0) return getString(R.string.shift_target_reached) // Segurança adicional
+        // Poderia adicionar um limite superior para millisRestantes para evitar datas muito distantes se avgPH for muito pequeno.
+
+        val horaPrevistaMillis = System.currentTimeMillis() + millisRestantes
+
+        return try {
+            // 'this' aqui é o Contexto do Serviço
+            val formatoHora = android.text.format.DateFormat.getTimeFormat(this)
+            formatoHora.format(Date(horaPrevistaMillis)) // Usa java.util.Date
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao formatar hora prevista de fim: ${e.message}", e)
+            "--:--" // Fallback em caso de erro na formatação
+        }
+    }
+    // -------- FIM DA FUNÇÃO MOVIDA --------
 }

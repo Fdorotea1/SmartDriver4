@@ -18,8 +18,7 @@ import androidx.core.content.ContextCompat
 import com.example.smartdriver.HistoryActivity
 import com.example.smartdriver.MainActivity
 import com.example.smartdriver.R
-// Importa OverlayService para aceder às suas constantes
-import com.example.smartdriver.overlay.OverlayService // Garante que esta importação existe se OverlayService estiver no mesmo package, senão ajusta
+import com.example.smartdriver.overlay.OverlayService
 
 class MenuView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
@@ -35,26 +34,30 @@ class MenuView @JvmOverloads constructor(
     private val shutdownItem: TextView
     private val shiftStatusTextView: TextView
     private val shiftTimerTextView: TextView
-    // private val shiftEarningsTextView: TextView // <<< REMOVIDA REFERÊNCIA
-    private val timeToTargetTextView: TextView    // <<< NOVA REFERÊNCIA
+    private val timeToTargetTextView: TextView
     private val shiftAverageTextView: TextView
     private val shiftToggleButton: Button
     private val shiftEndButton: Button
 
+    // NOVO: Referência ao campo "Fim Previsto"
+    private val expectedEndTimeTextView: TextView
+
     init {
         LayoutInflater.from(context).inflate(R.layout.quick_menu_layout, this, true)
-        orientation = VERTICAL // Certifica-te que esta orientação é a desejada para o LinearLayout raiz do MenuView
+        orientation = VERTICAL
 
         mainItem = findViewById(R.id.menu_item_main)
         historyItem = findViewById(R.id.menu_item_history)
         shutdownItem = findViewById(R.id.menu_item_shutdown)
         shiftStatusTextView = findViewById(R.id.textViewShiftStatus)
         shiftTimerTextView = findViewById(R.id.textViewShiftTimer)
-        // shiftEarningsTextView = findViewById(R.id.textViewShiftEarnings) // <<< LINHA REMOVIDA
-        timeToTargetTextView = findViewById(R.id.textViewTimeToTarget)       // <<< NOVA LINHA
+        timeToTargetTextView = findViewById(R.id.textViewTimeToTarget)
         shiftAverageTextView = findViewById(R.id.textViewShiftAveragePerHour)
         shiftToggleButton = findViewById(R.id.buttonShiftToggle)
         shiftEndButton = findViewById(R.id.buttonShiftEnd)
+
+        // NOVO: liga o novo campo "Fim Previsto"
+        expectedEndTimeTextView = findViewById(R.id.textViewExpectedEndTime)
 
         // Listeners
         mainItem.setOnClickListener { navigateToActivity(MainActivity::class.java) }
@@ -69,15 +72,12 @@ class MenuView @JvmOverloads constructor(
                     sendDismissMenuAction()
                 },
                 negativeAction = {
-                    // Se o utilizador cancelar o shutdown, talvez queira manter o menu aberto
-                    // sendDismissMenuAction() // Opcional: descomentar se quiser fechar o menu ao cancelar
+                    // sendDismissMenuAction() // Opcional
                 }
             )
         }
 
         shiftToggleButton.setOnClickListener {
-            // A lógica de pedir a meta será tratada no OverlayService
-            // ao receber ACTION_TOGGLE_SHIFT_STATE quando o turno não está ativo.
             sendServiceAction(OverlayService.ACTION_TOGGLE_SHIFT_STATE)
         }
 
@@ -99,10 +99,10 @@ class MenuView @JvmOverloads constructor(
         positiveAction: () -> Unit,
         negativeAction: (() -> Unit)? = null
     ) {
-        val builder = AlertDialog.Builder(context) // Aplica um tema se tiveres um (R.style.AlertDialogTheme)
+        val builder = AlertDialog.Builder(context)
             .setTitle(title)
             .setMessage(message)
-            .setIcon(android.R.drawable.ic_dialog_alert) // Ícone padrão do sistema
+            .setIcon(android.R.drawable.ic_dialog_alert)
             .setPositiveButton(context.getString(R.string.confirm_dialog_yes)) { dialog, _ ->
                 positiveAction.invoke()
                 dialog.dismiss()
@@ -112,34 +112,27 @@ class MenuView @JvmOverloads constructor(
                 dialog.dismiss()
             }
             .setOnCancelListener {
-                negativeAction?.invoke() // Garante que negativeAction é chamada se o diálogo for cancelado
+                negativeAction?.invoke()
             }
         try {
             val dialog = builder.create()
-            // Tenta definir o tipo de janela para overlays
-            // Isto é importante para que o diálogo apareça sobre outras apps se o menu for um overlay
             dialog.window?.let { window ->
                 val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 } else {
                     @Suppress("DEPRECATION")
-                    WindowManager.LayoutParams.TYPE_SYSTEM_ALERT // Requer permissão SYSTEM_ALERT_WINDOW
+                    WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
                 }
                 try {
                     window.setType(windowType)
                 } catch (e: IllegalAccessError) {
-                    // Em alguns dispositivos/versões do Android, definir TYPE_APPLICATION_OVERLAY
-                    // pode falhar se o contexto não for o correto, mesmo com a permissão.
-                    // O diálogo pode ainda funcionar, mas pode não aparecer sobre tudo.
                     Log.w(TAG, "Não foi possível definir o tipo de janela para o diálogo de confirmação.", e)
                 }
             }
             dialog.show()
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao mostrar diálogo de confirmação: ${e.message}", e)
-            // Fallback para um Toast se o diálogo falhar completamente
             Toast.makeText(context, "$title - $message (Use botões)", Toast.LENGTH_LONG).show()
-            // Considerar chamar positiveAction/negativeAction aqui se o diálogo é crítico e falhou
         }
     }
 
@@ -152,19 +145,17 @@ class MenuView @JvmOverloads constructor(
         shiftTimerTextView.text = timeText
     }
 
-    // <<< FUNÇÃO REMOVIDA >>>
-    // fun updateShiftEarnings(earningsText: String) {
-    //    shiftEarningsTextView.text = earningsText
-    // }
-
-    // <<< NOVA FUNÇÃO PARA ATUALIZAR O TEMPO ATÉ À META >>>
     fun updateTimeToTarget(timeToTargetText: String) {
         timeToTargetTextView.text = timeToTargetText
     }
-    // <<< FIM DA NOVA FUNÇÃO >>>
 
     fun updateShiftAverage(averageText: String) {
         shiftAverageTextView.text = averageText
+    }
+
+    // NOVO: Método para atualizar o campo "Fim Previsto"
+    fun updateExpectedEndTime(endTimeText: String) {
+        expectedEndTimeTextView.text = endTimeText
     }
 
     private fun updateShiftButtons(isActive: Boolean, isPaused: Boolean) {
@@ -172,28 +163,18 @@ class MenuView @JvmOverloads constructor(
             if (!isActive) {
                 shiftToggleButton.text = context.getString(R.string.shift_action_start)
                 shiftToggleButton.isEnabled = true
-                shiftEndButton.visibility = View.GONE // Esconde o botão de terminar se não há turno
-                // Define cores dos botões (opcional, requer que as cores existam em colors.xml)
-                // try { shiftToggleButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_start_color)) }
-                // catch (e: Resources.NotFoundException) { Log.w(TAG, "Cor button_start_color não encontrada", e)}
+                shiftEndButton.visibility = View.GONE
             } else {
-                shiftEndButton.visibility = View.VISIBLE // Mostra o botão de terminar turno
+                shiftEndButton.visibility = View.VISIBLE
                 if (isPaused) {
                     shiftToggleButton.text = context.getString(R.string.shift_action_resume)
-                    // try { shiftToggleButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_resume_color)) }
-                    // catch (e: Resources.NotFoundException) { Log.w(TAG, "Cor button_resume_color não encontrada", e)}
                 } else {
                     shiftToggleButton.text = context.getString(R.string.shift_action_pause)
-                    // try { shiftToggleButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_pause_color)) }
-                    // catch (e: Resources.NotFoundException) { Log.w(TAG, "Cor button_pause_color não encontrada", e)}
                 }
-                shiftToggleButton.isEnabled = true // Botão de alternar pausa/retomar está sempre ativo se o turno estiver ativo
-                // try { shiftEndButton.setBackgroundColor(ContextCompat.getColor(context, R.color.button_end_color)) }
-                // catch (e: Resources.NotFoundException) { Log.w(TAG, "Cor button_end_color não encontrada", e)}
+                shiftToggleButton.isEnabled = true
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erro inesperado em updateShiftButtons: ${e.message}", e)
-            // Em caso de erro, tenta redefinir para um estado seguro
             shiftToggleButton.text = context.getString(R.string.shift_action_start)
             shiftToggleButton.isEnabled = true
             shiftEndButton.visibility = View.GONE
@@ -204,12 +185,10 @@ class MenuView @JvmOverloads constructor(
         Log.d(TAG, "Navegando para ${activityClass.simpleName}")
         try {
             val intent = Intent(context, activityClass).apply {
-                // Usar FLAG_ACTIVITY_REORDER_TO_FRONT se a Activity já existir na pilha e quiser trazê-la para frente
-                // em vez de limpar o topo. Depende do comportamento desejado.
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             }
             context.startActivity(intent)
-            sendDismissMenuAction() // Fecha o menu após iniciar a navegação
+            sendDismissMenuAction()
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao iniciar ${activityClass.simpleName}: ${e.message}", e)
             Toast.makeText(context, "Erro ao abrir ecrã: ${activityClass.simpleName}", Toast.LENGTH_SHORT).show()
@@ -221,7 +200,6 @@ class MenuView @JvmOverloads constructor(
             this.action = action
         }
         try {
-            // Iniciar o serviço em foreground se for Android O ou superior, caso contrário, serviço normal
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
