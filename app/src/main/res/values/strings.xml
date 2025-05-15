@@ -1,7 +1,11 @@
 <resources>
     <string name="app_name">SmartDriver</string>
     <string name="splash_logo_description">Logotipo do SmartDriver</string>
+    <string name="toast_tracking_discarded">Tracking da viagem descartado.</string>
+    <string name="toast_error_set_target_activity">Erro ao abrir ecrã para definir meta.</string>
     <string name="settings_title">Configurações do SmartDriver</string>
+    <!-- A linha <string name="title_activity_settings">@string/settings_title</string> foi removida
+         pois o AndroidManifest foi alterado para usar settings_title diretamente -->
     <string name="service_inactive">Serviço inativo. Clique para ativar.</string>
     <string name="service_active">Serviço ativo e monitorando</string>
     <string name="settings_button">CONFIGURAÇÕES AVANÇADAS</string>
@@ -31,41 +35,56 @@
     <string name="save_settings">GUARDAR</string>
     <string name="reset_defaults">REPOR PADRÕES</string>
     <string name="preview_overlay">Pré-visualização</string>
+
     <string name="history_empty">Histórico vazio.</string>
+
     <string name="menu_main_screen">Ecrã Principal</string>
     <string name="menu_history">Histórico</string>
     <string name="menu_shutdown">Desligar App</string>
+
     <string name="accessibility_service_description">O SmartDriver monitora as ofertas de viagem em aplicativos como Uber para calcular sua rentabilidade em tempo real. Isso permite que você decida rapidamente se uma oferta vale a pena aceitar.</string>
+
+    <!-- Strings para o estado do Turno e ações -->
     <string name="shift_status_none">Nenhum Turno Iniciado</string>
     <string name="shift_status_active">Turno Ativo</string>
     <string name="shift_status_paused">Turno Pausado</string>
     <string name="shift_timer_label">Tempo Turno:</string>
+    <!-- <string name="shift_earnings_label">Ganhos Turno:</string> --> <!-- Removida para a nova lógica -->
     <string name="shift_average_label">Média Turno:</string>
     <string name="shift_action_start">Iniciar Turno</string>
     <string name="shift_action_pause">Pausar Turno</string>
     <string name="shift_action_resume">Retomar Turno</string>
     <string name="shift_action_end">Terminar Turno</string>
+
+    <!-- Strings para Diálogos de Confirmação -->
     <string name="confirm_dialog_yes">Sim</string>
     <string name="confirm_dialog_no">Não</string>
     <string name="confirm_shutdown_title">Desligar Aplicação?</string>
     <string name="confirm_shutdown_message">Tem a certeza que deseja encerrar o SmartDriver e todos os seus serviços?</string>
     <string name="confirm_end_shift_title">Terminar Turno?</string>
     <string name="confirm_end_shift_message">Tem a certeza que deseja terminar o turno atual? Os dados serão guardados.</string>
+
+    <!-- Strings para Notificações (Adicionadas/Verificadas) -->
     <string name="notification_overlay_ready">SmartDriver pronto</string>
     <string name="notification_channel_description">Notificações do serviço SmartDriver</string>
     <string name="notification_tracking_trip">Acompanhando Viagem...</string>
-    <string name="notification_shift_active">Turno ativo (%1$s)</string>
+    <string name="notification_shift_active">Turno ativo (%1$s)</string> <!-- %1$s será substituído pelo tempo -->
     <string name="notification_shift_paused">Turno pausado</string>
+
+    <!-- Strings para a nova UI do Menu de "Tempo p/ Meta" (Adicionadas/Verificadas) -->
     <string name="shift_time_to_target_label">Tempo p/ Meta:</string>
     <string name="shift_target_not_set">Meta não definida</string>
     <string name="shift_target_reached">Meta Atingida!</string>
     <string name="shift_calculating_time_to_target">Calcular...</string>
-    <string name="shift_calculating_average">-- €/h (calc..)</string>
+    <string name="shift_calculating_average">-- €/h (calc..)</string> <!-- Para média instável -->
+
+    <!-- Strings para o futuro diálogo de definir meta (Adicionadas/Verificadas) -->
     <string name="dialog_set_shift_target_title">Definir Meta de Ganhos (€)</string>
     <string name="dialog_shift_target_hint">Ex: 100.00</string>
     <string name="dialog_set_target_button_ok">Definir</string>
     <string name="dialog_set_target_button_cancel">Cancelar</string>
-    <string name="toast_target_set_to">Meta definida para: %1$.2f €</string>
+    <string name="toast_target_set_to">Meta definida para: %1$.2f €</string> <!-- %1$.2f para formatar o Double -->
     <string name="toast_invalid_target_value">Valor da meta inválido.</string>
     <string name="toast_shift_already_active_set_target_info">Termine o turno atual para definir uma nova meta.</string>
+
 </resources>
