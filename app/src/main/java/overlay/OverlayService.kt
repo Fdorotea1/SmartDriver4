@@ -340,7 +340,8 @@ class OverlayService : Service() {
             val avgStr = calculateCurrentShiftAveragePerHourString(avgNum)
             val tTTStr = calculateAndFormatTimeToTarget()
             val expectedEndTime: String = calculateAndFormatExpectedEndTime()
-
+            val metaFormatada = currencyFormatter.format(shiftTargetEarnings)
+            menu.updateShiftTarget(metaFormatada)
             Log.d(
                 TAG,
                 "updateMenuViewShiftUI: TMeta=$tTTStr, Meta=${currencyFormatter.format(shiftTargetEarnings)}, GReais=${currencyFormatter.format(shiftTotalEarnings)}, FimPrevisto=$expectedEndTime"

@@ -1,4 +1,4 @@
-package com.example.smartdriver.overlay // Ou o teu package correto
+package com.example.smartdriver.overlay
 
 import android.app.AlertDialog
 import android.content.Context
@@ -38,9 +38,10 @@ class MenuView @JvmOverloads constructor(
     private val shiftAverageTextView: TextView
     private val shiftToggleButton: Button
     private val shiftEndButton: Button
-
-    // NOVO: Referência ao campo "Fim Previsto"
     private val expectedEndTimeTextView: TextView
+
+    // NOVO: Referência ao campo "Meta"
+    private val shiftTargetTextView: TextView
 
     init {
         LayoutInflater.from(context).inflate(R.layout.quick_menu_layout, this, true)
@@ -55,9 +56,9 @@ class MenuView @JvmOverloads constructor(
         shiftAverageTextView = findViewById(R.id.textViewShiftAveragePerHour)
         shiftToggleButton = findViewById(R.id.buttonShiftToggle)
         shiftEndButton = findViewById(R.id.buttonShiftEnd)
-
-        // NOVO: liga o novo campo "Fim Previsto"
         expectedEndTimeTextView = findViewById(R.id.textViewExpectedEndTime)
+        // NOVO: Liga o campo Meta
+        shiftTargetTextView = findViewById(R.id.textViewShiftTarget)
 
         // Listeners
         mainItem.setOnClickListener { navigateToActivity(MainActivity::class.java) }
@@ -88,7 +89,6 @@ class MenuView @JvmOverloads constructor(
                 positiveAction = {
                     sendServiceAction(OverlayService.ACTION_END_SHIFT)
                 }
-                // negativeAction = {} // Opcional
             )
         }
     }
@@ -153,9 +153,13 @@ class MenuView @JvmOverloads constructor(
         shiftAverageTextView.text = averageText
     }
 
-    // NOVO: Método para atualizar o campo "Fim Previsto"
     fun updateExpectedEndTime(endTimeText: String) {
         expectedEndTimeTextView.text = endTimeText
+    }
+
+    // NOVO: Atualizar a Meta (target) no menu
+    fun updateShiftTarget(targetText: String) {
+        shiftTargetTextView.text = targetText
     }
 
     private fun updateShiftButtons(isActive: Boolean, isPaused: Boolean) {

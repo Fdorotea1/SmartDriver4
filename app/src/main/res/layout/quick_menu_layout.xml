@@ -7,9 +7,8 @@
     android:background="?android:attr/colorBackground"
     android:padding="12dp"
     android:elevation="8dp"
-    tools:ignore="HardcodedText,UseCompatTextViewDrawableXml">
+    tools:ignore="HardcodedText,UseCompatTextViewDrawableXml" >
 
-    <!-- Botão e menu principais -->
     <TextView
         android:id="@+id/menu_item_main"
         android:layout_width="match_parent"
@@ -66,7 +65,6 @@
         tools:text="Turno Pausado"
         android:text="@string/shift_status_none"/>
 
-    <!-- Linha do tempo do turno -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -94,7 +92,6 @@
             android:text="00:00:00"/>
     </LinearLayout>
 
-    <!-- Linha do tempo para meta -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -122,7 +119,63 @@
             android:text="--:--:--"/>
     </LinearLayout>
 
-    <!-- NOVA LINHA: FIM PREVISTO -->
+    <!-- BLOCO DA MÉDIA/HORA -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="4dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/shift_average_label"
+            android:textSize="14sp"
+            android:textColor="?android:attr/textColorPrimary"/>
+
+        <TextView
+            android:id="@+id/textViewShiftAveragePerHour"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="?android:attr/textColorPrimary"
+            tools:text="15.8 €/h"
+            android:text="-- €/h"/>
+    </LinearLayout>
+
+    <!-- BLOCO DA META DIÁRIA -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="4dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/shift_target_label"
+            android:textSize="14sp"
+            android:textColor="?android:attr/textColorPrimary"/>
+
+        <TextView
+            android:id="@+id/textViewShiftTarget"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="?android:attr/textColorPrimary"
+            android:text="-- €"
+            tools:text="100,00 €"/>
+    </LinearLayout>
+
+    <!-- BLOCO DO FIM PREVISTO -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -146,37 +199,10 @@
             android:textSize="14sp"
             android:textStyle="bold"
             android:textColor="?android:attr/textColorPrimary"
-            tools:text="23:45"
-            android:text="@string/expected_end_time_placeholder"/>
+            android:text="--:--"
+            tools:text="17:24"/>
     </LinearLayout>
 
-    <!-- Média €/h -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/shift_average_label"
-            android:textSize="14sp"
-            android:textColor="?android:attr/textColorPrimary"/>
-
-        <TextView
-            android:id="@+id/textViewShiftAveragePerHour"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:gravity="end"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:textColor="?android:attr/textColorPrimary"
-            tools:text="15.8 €/h"
-            android:text="-- €/h"/>
-    </LinearLayout>
-
-    <!-- Botões do turno -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -225,4 +251,5 @@
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
         android:drawableStart="@android:drawable/ic_menu_close_clear_cancel"/>
+
 </LinearLayout>

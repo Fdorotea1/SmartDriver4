@@ -3,7 +3,7 @@
     <string name="expected_end_time_placeholder">--:--</string>
     <string name="app_name">SmartDriver</string>
     <string name="splash_logo_description">Logotipo do SmartDriver</string>
-    <string name="toast_tracking_discarded">Tracking da viagem descartado.</string>
+    <string name="toast_tracking_discarded">Oferta Cancelada.</string>
     <string name="toast_error_set_target_activity">Erro ao abrir ecrã para definir meta.</string>
     <string name="settings_title">Configurações do SmartDriver</string>
     <!-- A linha <string name="title_activity_settings">@string/settings_title</string> foi removida
@@ -14,7 +14,7 @@
     <string name="service_button">Configurar Serviço de Acessibilidade</string>
     <string name="overlay_button">Permitir overlay</string>
     <string name="capture_button">Iniciar Captura de Tela</string>
-    <string name="shutdown_button">ENCERRAR APLICATIVO</string>
+    <string name="shutdown_button">ENCERRAR APLICAÇÃO</string>
     <string name="activate_overlay_switch">Ativar semáforo de ofertas</string>
     <string name="save_images_switch_label">Salvar capturas de tela na galeria</string>
     <string name="app_status_on">Assistente SmartDriver ATIVO</string>
@@ -37,9 +37,8 @@
     <string name="save_settings">GUARDAR</string>
     <string name="reset_defaults">REPOR PADRÕES</string>
     <string name="preview_overlay">Pré-visualização</string>
-
+    <string name="shift_target_label">Meta:</string>
     <string name="history_empty">Histórico vazio.</string>
-
     <string name="menu_main_screen">Ecrã Principal</string>
     <string name="menu_history">Histórico</string>
     <string name="menu_shutdown">Desligar App</string>
