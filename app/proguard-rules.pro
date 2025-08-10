@@ -1,21 +1,27 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ---- Regras base do projeto ----
+# Mantém as classes utilitárias e modelos em utils (métodos e campos)
+-keep class com.example.smartdriver.utils.** { *; }
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Mantém as views de overlay (evita remoções/renomes que partem reflexão e layouts)
+-keep class com.example.smartdriver.overlay.OverlayView { *; }
+-keep class com.example.smartdriver.overlay.TrackingOverlayView { *; }
+-keep class com.example.smartdriver.overlay.MenuView { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Atributos úteis para genéricos/anotações
+-keepattributes Signature, InnerClasses, EnclosingMethod, RuntimeVisibleAnnotations, RuntimeInvisibleAnnotations, *Annotation*
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Gson (evitar warnings e manter nomes quando necessário)
+-dontwarn com.google.gson.**
+-keep class com.google.gson.stream.** { *; }
+
+# AndroidX Lifecycle (evitar ruído)
+-dontwarn androidx.lifecycle.**
+
+# Trip history e modelos (se forem serializados por reflexão)
+-keep class com.example.smartdriver.utils.TripHistoryEntry { *; }
+-keep class com.example.smartdriver.utils.OfferData { *; }
+-keep class com.example.smartdriver.utils.EvaluationResult { *; }
+-keep class com.example.smartdriver.utils.BorderRating { *; }
+-keep class com.example.smartdriver.utils.IndividualRating { *; }
+
+# ---- Fim ----

@@ -3,7 +3,6 @@ package com.example.smartdriver.overlay
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.content.res.Resources
 import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
@@ -14,21 +13,18 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import com.example.smartdriver.HistoryActivity
 import com.example.smartdriver.MainActivity
 import com.example.smartdriver.R
-import com.example.smartdriver.overlay.OverlayService
 
 class MenuView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
 ) : LinearLayout(context, attrs, defStyleAttr) {
 
-    companion object {
-        private const val TAG = "MenuView"
-    }
+    companion object { private const val TAG = "MenuView" }
 
-    // Referências às Views
+    // Views
     private val mainItem: TextView
     private val historyItem: TextView
     private val shutdownItem: TextView
@@ -39,8 +35,6 @@ class MenuView @JvmOverloads constructor(
     private val shiftToggleButton: Button
     private val shiftEndButton: Button
     private val expectedEndTimeTextView: TextView
-
-    // NOVO: Referência ao campo "Meta"
     private val shiftTargetTextView: TextView
 
     init {
@@ -57,8 +51,15 @@ class MenuView @JvmOverloads constructor(
         shiftToggleButton = findViewById(R.id.buttonShiftToggle)
         shiftEndButton = findViewById(R.id.buttonShiftEnd)
         expectedEndTimeTextView = findViewById(R.id.textViewExpectedEndTime)
-        // NOVO: Liga o campo Meta
         shiftTargetTextView = findViewById(R.id.textViewShiftTarget)
+
+        // A11y básica
+        ViewCompat.setAccessibilityHeading(mainItem, true)
+        mainItem.contentDescription = "Abrir ecrã principal"
+        historyItem.contentDescription = "Abrir histórico"
+        shutdownItem.contentDescription = "Desligar serviço"
+        shiftToggleButton.contentDescription = "Iniciar, pausar ou retomar turno"
+        shiftEndButton.contentDescription = "Terminar turno"
 
         // Listeners
         mainItem.setOnClickListener { navigateToActivity(MainActivity::class.java) }
@@ -71,9 +72,6 @@ class MenuView @JvmOverloads constructor(
                 positiveAction = {
                     sendServiceAction(OverlayService.ACTION_REQUEST_SHUTDOWN)
                     sendDismissMenuAction()
-                },
-                negativeAction = {
-                    // sendDismissMenuAction() // Opcional
                 }
             )
         }
@@ -108,12 +106,10 @@ class MenuView @JvmOverloads constructor(
                 dialog.dismiss()
             }
             .setNegativeButton(context.getString(R.string.confirm_dialog_no)) { dialog, _ ->
-                negativeAction?.invoke()
-                dialog.dismiss()
+                negativeAction?.invoke(); dialog.dismiss()
             }
-            .setOnCancelListener {
-                negativeAction?.invoke()
-            }
+            .setOnCancelListener { negativeAction?.invoke() }
+
         try {
             val dialog = builder.create()
             dialog.window?.let { window ->
@@ -123,21 +119,26 @@ class MenuView @JvmOverloads constructor(
                     @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
                 }
-                try {
-                    window.setType(windowType)
-                } catch (e: IllegalAccessError) {
-                    Log.w(TAG, "Não foi possível definir o tipo de janela para o diálogo de confirmação.", e)
-                }
+                try { window.setType(windowType) } catch (_: Throwable) {}
             }
             dialog.show()
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao mostrar diálogo de confirmação: ${e.message}", e)
-            Toast.makeText(context, "$title - $message (Use botões)", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Erro ao mostrar diálogo: ${e.message}", e)
+            Toast.makeText(context, "$title - $message (Use os botões)", Toast.LENGTH_LONG).show()
         }
     }
 
+    // ----------------- API de atualização -----------------
+
     fun updateShiftStatus(statusText: String, isActive: Boolean, isPaused: Boolean) {
         shiftStatusTextView.text = statusText
+        // Cores simples sem depender de resources novos
+        val color = when {
+            !isActive -> ColorInt("#455A64")      // cinza-azulado
+            isPaused -> ColorInt("#F9A825")       // amarelo
+            else -> ColorInt("#2E7D32")           // verde
+        }
+        shiftStatusTextView.setTextColor(color)
         updateShiftButtons(isActive, isPaused)
     }
 
@@ -157,10 +158,11 @@ class MenuView @JvmOverloads constructor(
         expectedEndTimeTextView.text = endTimeText
     }
 
-    // NOVO: Atualizar a Meta (target) no menu
     fun updateShiftTarget(targetText: String) {
         shiftTargetTextView.text = targetText
     }
+
+    // ----------------- Internos -----------------
 
     private fun updateShiftButtons(isActive: Boolean, isPaused: Boolean) {
         try {
@@ -170,15 +172,14 @@ class MenuView @JvmOverloads constructor(
                 shiftEndButton.visibility = View.GONE
             } else {
                 shiftEndButton.visibility = View.VISIBLE
-                if (isPaused) {
-                    shiftToggleButton.text = context.getString(R.string.shift_action_resume)
-                } else {
-                    shiftToggleButton.text = context.getString(R.string.shift_action_pause)
-                }
+                shiftToggleButton.text = if (isPaused)
+                    context.getString(R.string.shift_action_resume)
+                else
+                    context.getString(R.string.shift_action_pause)
                 shiftToggleButton.isEnabled = true
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Erro inesperado em updateShiftButtons: ${e.message}", e)
+            Log.e(TAG, "Erro em updateShiftButtons: ${e.message}", e)
             shiftToggleButton.text = context.getString(R.string.shift_action_start)
             shiftToggleButton.isEnabled = true
             shiftEndButton.visibility = View.GONE
@@ -186,7 +187,7 @@ class MenuView @JvmOverloads constructor(
     }
 
     private fun navigateToActivity(activityClass: Class<*>) {
-        Log.d(TAG, "Navegando para ${activityClass.simpleName}")
+        Log.d(TAG, "Abrir ${activityClass.simpleName}")
         try {
             val intent = Intent(context, activityClass).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
@@ -200,9 +201,7 @@ class MenuView @JvmOverloads constructor(
     }
 
     private fun sendServiceAction(action: String) {
-        val intent = Intent(context, OverlayService::class.java).apply {
-            this.action = action
-        }
+        val intent = Intent(context, OverlayService::class.java).apply { this.action = action }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -210,14 +209,19 @@ class MenuView @JvmOverloads constructor(
                 context.startService(intent)
             }
         } catch (e: IllegalStateException) {
-            Log.e(TAG, "Erro ao enviar ação '$action' (App em background?): ${e.message}", e)
-            Toast.makeText(context, "Não foi possível executar a ação com o app em background.", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Erro ao enviar ação '$action': ${e.message}", e)
+            Toast.makeText(context, "Não foi possível executar a ação com a app em background.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            Log.e(TAG, "Erro geral ao enviar ação '$action' para OverlayService: ${e.message}", e)
+            Log.e(TAG, "Erro geral ao enviar ação '$action': ${e.message}", e)
         }
     }
 
     private fun sendDismissMenuAction() {
         sendServiceAction(OverlayService.ACTION_DISMISS_MENU)
     }
+
+    // Pequena helper para cores via hex
+    private fun ColorInt(hex: String): Int = try {
+        android.graphics.Color.parseColor(hex)
+    } catch (_: Throwable) { android.graphics.Color.DKGRAY }
 }
