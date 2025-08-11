@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/queuedBannerRoot"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/bg_banner_center"
+    android:elevation="10dp">
+
+    <TextView
+        android:id="@+id/tvTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/queued_offer"
+        android:textStyle="bold"
+        android:textSize="16sp"
+        android:letterSpacing="0.02"
+        android:paddingBottom="2dp"
+        android:textColor="@android:color/black"/>
+
+    <TextView
+        android:id="@+id/tvHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/queued_offer_tap"
+        android:textSize="12sp"
+        android:alpha="0.8"
+        android:textColor="@android:color/black"/>
+</LinearLayout>

@@ -12,11 +12,15 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
-import com.example.smartdriver.utils.BorderRating
-import com.example.smartdriver.utils.IndividualRating
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import com.example.smartdriver.utils.BorderRating
+import com.example.smartdriver.utils.IndividualRating
 
 @SuppressLint("ClickableViewAccessibility")
 class TrackingOverlayView(
@@ -26,79 +30,105 @@ class TrackingOverlayView(
 ) : View(context) {
 
     companion object {
-        private val BACKGROUND_COLOR = Color.parseColor("#E6FFFFFF")
+        private val BG_COLOR = Color.parseColor("#E6FFFFFF")
+        private val TEXT_COLOR_MAIN = Color.BLACK
+        private val LEGEND_COLOR = Color.parseColor("#6B6B6B")
+
         private val BORDER_COLOR_GREEN = Color.parseColor("#4CAF50")
         private val BORDER_COLOR_YELLOW = Color.parseColor("#FFC107")
         private val BORDER_COLOR_RED = Color.parseColor("#F44336")
         private val BORDER_COLOR_GRAY = Color.parseColor("#9E9E9E")
-        private val TEXT_COLOR_VALUE = Color.BLACK
-        private const val PLACEHOLDER_TEXT = "--"
 
-        private val VPH_COLOR_GOOD = BORDER_COLOR_GREEN
-        private val VPH_COLOR_MEDIUM = Color.parseColor("#FF9800")
-        private val VPH_COLOR_POOR = BORDER_COLOR_RED
-        private val VPH_COLOR_UNKNOWN = Color.DKGRAY
+        private val METRIC_COLOR_GOOD = BORDER_COLOR_GREEN
+        private val METRIC_COLOR_MEDIUM = Color.parseColor("#FF9800")
+        private val METRIC_COLOR_POOR = BORDER_COLOR_RED
+        private val METRIC_COLOR_UNKNOWN = Color.DKGRAY
 
-        private val VPK_COLOR_GOOD = BORDER_COLOR_GREEN
-        private val VPK_COLOR_MEDIUM = BORDER_COLOR_YELLOW
-        private val VPK_COLOR_POOR = BORDER_COLOR_RED
-        private val VPK_COLOR_UNKNOWN = Color.DKGRAY
+        private const val DEFAULT_DIAMETER_DP = 104f
+        private const val BORDER_WIDTH_DP = 3.5f
+        private const val MAIN_TEXT_SP = 19f
+        private const val LEGEND_TEXT_SP = 10.5f
+        private const val PADDING_DP = 8f
 
-        private const val PADDING_DP = 12f
-        private const val BORDER_WIDTH_DP = 8f
-        private const val CORNER_RADIUS_DP = 10f
-        private const val TEXT_SIZE_SP = 16f
-        private const val LINE_SPACING_DP = 5f
+        private const val SAFE_MARGIN_DP = 8f
+        private const val TOP_BAND_RATIO = 0.40f
+
+        private const val DRAG_ACTIVATION_DELAY_MS = 120L
+        private const val DRAG_DISTANCE_FACTOR = 1.5f
     }
 
-    private var currentValuePerHour: Double? = null
-    private var currentHourRating: IndividualRating = IndividualRating.UNKNOWN
-    private var elapsedTimeSeconds: Long = 0
+    // páginas: 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta
+    private var pageIndex = 0
+    private var circleDiameterPx: Int
+    private var paddingPx: Float
+    private var borderWidthPx: Float
+    private var safeMarginPx: Int
 
-    private var initialValuePerKm: Double? = null
-    private var initialTotalDistance: Double? = null
-    private var offerValue: String? = null
-    private var initialTotalDurationMinutes: Int? = null
-    private var initialKmRating: IndividualRating = IndividualRating.UNKNOWN
-    private var combinedBorderRating: BorderRating = BorderRating.GRAY
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BG_COLOR }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val mainPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_MAIN; typeface = Typeface.DEFAULT_BOLD }
+    private val legendPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = LEGEND_COLOR }
 
-    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val valueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
-    private val vphTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
-    private val vpkTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    private var mainTextHeight = 0f
+    private var legendTextHeight = 0f
 
-    private var paddingPx: Float = 0f
-    private var borderRadiusPx: Float = 0f
-    private var textHeight: Float = 0f
-    private var lineSpacingPx: Float = 0f
-
+    // gestos/drag
+    private val gestureDetector: GestureDetector
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var isDragging = false
+    private var dragReady = false
+    private var dragDelayPosted = false
     private var touchSlop: Int = 0
     private var initialWindowX: Int = 0
     private var initialWindowY: Int = 0
     private var initialTouchRawX: Float = 0f
     private var initialTouchRawY: Float = 0f
+    private val dragReadyRunnable = Runnable { dragReady = true; dragDelayPosted = false }
 
-    private val gestureDetector: GestureDetector
-    private val mainHandler = Handler(Looper.getMainLooper())
+    // dados tempo/€/h
+    private var currentValuePerHour: Double? = null
+    private var currentHourRating: IndividualRating = IndividualRating.UNKNOWN
+    private var elapsedTimeSeconds: Long = 0
+
+    // dados iniciais (estáticos do semáforo)
+    private var initialValuePerKm: Double? = null
+    private var initialTotalDistance: Double? = null
+    private var offerValueRaw: String? = null
+    private var initialTotalDurationMinutes: Int? = null
+    private var initialKmRating: IndividualRating = IndividualRating.UNKNOWN
+    private var combinedBorderRating: BorderRating = BorderRating.GRAY
+
+    // ecrã
+    private var screenW = 1080
+    private var screenH = 1920
+
+    private val euroSymbols = DecimalFormatSymbols(Locale.US)
+    private val dfHour1 = DecimalFormat("0.0", euroSymbols)
+    private val dfKm1 = DecimalFormat("0.0", euroSymbols)
+    private val dfVal = DecimalFormat("0.00", euroSymbols)
+    private val dfEurKm = DecimalFormat("0.00", euroSymbols)
 
     init {
-        val density = resources.displayMetrics.density
-        paddingPx = PADDING_DP * density
-        borderRadiusPx = CORNER_RADIUS_DP * density
-        lineSpacingPx = LINE_SPACING_DP * density
-        touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        val dm = resources.displayMetrics
+        val density = dm.density
+        val scaled = dm.scaledDensity
 
-        backgroundPaint.style = Paint.Style.FILL
-        backgroundPaint.color = BACKGROUND_COLOR
-        borderPaint.style = Paint.Style.STROKE
-        borderPaint.strokeWidth = BORDER_WIDTH_DP * density
-        valueTextPaint.color = TEXT_COLOR_VALUE
-        valueTextPaint.typeface = Typeface.DEFAULT_BOLD
-        vphTextPaint.typeface = Typeface.DEFAULT_BOLD
-        vpkTextPaint.typeface = Typeface.DEFAULT_BOLD
-        updateTextPaintSizes()
+        circleDiameterPx = (DEFAULT_DIAMETER_DP * density).toInt()
+        borderWidthPx = BORDER_WIDTH_DP * density
+        paddingPx = PADDING_DP * density
+        safeMarginPx = (SAFE_MARGIN_DP * density).toInt()
+
+        borderPaint.strokeWidth = borderWidthPx
+        mainPaint.textSize = MAIN_TEXT_SP * scaled
+        legendPaint.textSize = LEGEND_TEXT_SP * scaled
+        recalcTextMetrics()
+
+        touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        try {
+            val metrics = context.resources.displayMetrics
+            screenW = metrics.widthPixels
+            screenH = metrics.heightPixels
+        } catch (_: Exception) {}
 
         gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent): Boolean {
@@ -107,37 +137,43 @@ class TrackingOverlayView(
                 initialTouchRawX = e.rawX
                 initialTouchRawY = e.rawY
                 isDragging = false
-                // NOTA: não mostramos a drop zone aqui; só quando o arrasto começa.
+                dragReady = false
+                if (!dragDelayPosted) {
+                    dragDelayPosted = true
+                    mainHandler.postDelayed(dragReadyRunnable, DRAG_ACTIVATION_DELAY_MS)
+                }
                 return true
             }
 
-            override fun onScroll(
-                e1: MotionEvent, e2: MotionEvent, distanceX: Float, distanceY: Float
-            ): Boolean {
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (isDragging) return false
+                cancelDragDelay()
+                sendOverlayServiceSimpleAction(OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP)
+                pageIndex = (pageIndex + 1) % 4
+                invalidate()
+                return true
+            }
+
+            override fun onScroll(e1: MotionEvent, e2: MotionEvent, dx: Float, dy: Float): Boolean {
                 val totalDeltaX = e2.rawX - initialTouchRawX
                 val totalDeltaY = e2.rawY - initialTouchRawY
-                if (!isDragging && (abs(totalDeltaX) > touchSlop || abs(totalDeltaY) > touchSlop)) {
+                val distanceEnough = (abs(totalDeltaX) > touchSlop * DRAG_DISTANCE_FACTOR) ||
+                        (abs(totalDeltaY) > touchSlop * DRAG_DISTANCE_FACTOR)
+
+                if (!isDragging && dragReady && distanceEnough) {
                     isDragging = true
-                    // Mostrar drop zone APENAS quando realmente se inicia arrasto
                     sendOverlayServiceSimpleAction(OverlayService.ACTION_SHOW_DROP_ZONE)
                 }
                 if (isDragging) {
-                    layoutParams.x = initialWindowX + totalDeltaX.toInt()
-                    layoutParams.y = initialWindowY + totalDeltaY.toInt()
-                    mainHandler.post {
-                        try {
-                            if (isAttachedToWindow) windowManager.updateViewLayout(this@TrackingOverlayView, layoutParams)
-                        } catch (_: Exception) {}
-                    }
+                    applyClampedPosition(initialWindowX + totalDeltaX.toInt(), initialWindowY + totalDeltaY.toInt())
                 }
                 return true
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
                 if (isDragging) return false
-                // Stop tracking
+                cancelDragDelay()
                 sendOverlayServiceSimpleAction(OverlayService.ACTION_STOP_TRACKING)
-                // Esconder SEMPRE a drop zone
                 val intent = Intent(context, OverlayService::class.java).apply {
                     action = OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP
                     putExtra(OverlayService.EXTRA_UP_X, -1f)
@@ -158,9 +194,23 @@ class TrackingOverlayView(
                 }
                 context.startService(intent)
                 isDragging = false
+                cancelDragDelay()
             }
             true
         }
+    }
+
+    private fun cancelDragDelay() {
+        if (dragDelayPosted) {
+            mainHandler.removeCallbacks(dragReadyRunnable)
+            dragDelayPosted = false
+        }
+        dragReady = false
+    }
+
+    private fun recalcTextMetrics() {
+        mainTextHeight = mainPaint.descent() - mainPaint.ascent()
+        legendTextHeight = legendPaint.descent() - legendPaint.ascent()
     }
 
     private fun sendOverlayServiceSimpleAction(action: String) {
@@ -168,6 +218,7 @@ class TrackingOverlayView(
         try { context.startService(intent) } catch (_: Exception) {}
     }
 
+    // ======== APIs ========
     fun updateInitialData(
         iVpk: Double?, iDist: Double?, iDur: Int?, oVal: String?,
         iKmR: IndividualRating, cBR: BorderRating
@@ -175,11 +226,9 @@ class TrackingOverlayView(
         initialValuePerKm = iVpk
         initialTotalDistance = iDist
         initialTotalDurationMinutes = iDur
-        offerValue = oVal
+        offerValueRaw = oVal
         initialKmRating = iKmR
         combinedBorderRating = cBR
-        elapsedTimeSeconds = 0
-        requestLayout()
         invalidate()
     }
 
@@ -190,26 +239,44 @@ class TrackingOverlayView(
         invalidate()
     }
 
-    override fun onMeasure(wMS: Int, hMS: Int) {
-        updateTextPaintSizes()
-        val tVph = "€/h: 999.9"
-        val tVpk = "€/km Ini: 99.99"
-        val tDist = "Dist Ini: 999.9 km"
-        val tOffer = "Valor: 999.99 €"
-        val tTIni = "Tempo Ini: 999 m"
-        val tTEl = "Decorrido: 00:00:00"
-        val mW = listOf(tDist, tOffer, tTIni, tTEl).map { valueTextPaint.measureText(it) }.maxOrNull() ?: 0f
-        val vW = vphTextPaint.measureText(tVph)
-        val vpW = vpkTextPaint.measureText(tVpk)
-        val fMW = maxOf(mW, vW, vpW)
-        val rW = (paddingPx * 2) + fMW
-        val rH = (paddingPx * 2) + (textHeight * 6) + (lineSpacingPx * 5)
-        setMeasuredDimension(resolveSize(rW.toInt(), wMS), resolveSize(rH.toInt(), hMS))
+    fun setCircleDiameterDp(dp: Float) {
+        val px = (dp * resources.displayMetrics.density).toInt()
+        if (px != circleDiameterPx) {
+            circleDiameterPx = px
+            requestLayout()
+            applyClampedPosition(layoutParams.x, layoutParams.y)
+        }
     }
 
-    override fun onDraw(cv: Canvas) {
-        super.onDraw(cv)
-        updateTextPaintSizes()
+    fun setOpacity(alphaPercent: Int) {
+        val a = (alphaPercent.coerceIn(0, 100) / 100f * 255).toInt()
+        bgPaint.alpha = a
+        invalidate()
+    }
+
+    /** Chamar após addView para forçar topo-direito */
+    fun snapToTopRight() {
+        val side = measuredWidth.coerceAtLeast(circleDiameterPx)
+        val x = screenW - side - safeMarginPx
+        val y = safeMarginPx
+        layoutParams.x = x
+        layoutParams.y = y
+        mainHandler.post {
+            try { if (isAttachedToWindow) windowManager.updateViewLayout(this, layoutParams) } catch (_: Exception) {}
+        }
+    }
+
+    // ======== Measure/Draw ========
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val desired = circleDiameterPx
+        val w = resolveSize(desired, widthMeasureSpec)
+        val h = resolveSize(desired, heightMeasureSpec)
+        val side = min(w, h)
+        setMeasuredDimension(side, side)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
 
         borderPaint.color = when (combinedBorderRating) {
             BorderRating.GREEN -> BORDER_COLOR_GREEN
@@ -217,61 +284,235 @@ class TrackingOverlayView(
             BorderRating.RED -> BORDER_COLOR_RED
             else -> BORDER_COLOR_GRAY
         }
-        vphTextPaint.color = when (currentHourRating) {
-            IndividualRating.GOOD -> VPH_COLOR_GOOD
-            IndividualRating.MEDIUM -> VPH_COLOR_MEDIUM
-            IndividualRating.POOR -> VPH_COLOR_POOR
-            else -> VPH_COLOR_UNKNOWN
+
+        val cx = width / 2f
+        val cy = height / 2f
+        val radius = (min(width, height) / 2f) - borderWidthPx / 2f
+
+        canvas.drawCircle(cx, cy, radius, bgPaint)
+        canvas.drawCircle(cx, cy, radius, borderPaint)
+
+        when (pageIndex) {
+            0 -> { // Tempo: [inicial | decorrido]
+                val topLegend = "inicial"
+                val bottomLegend = "decorrido"
+                val top = initialTotalDurationMinutes?.let { formatHM(it) } ?: "--h--"
+                val bottom = formatElapsedHM(elapsedTimeSeconds)
+                drawTwoLinesWithLegends(
+                    canvas, cx, cy, radius,
+                    topLegend, top, TEXT_COLOR_MAIN,
+                    bottomLegend, bottom, TEXT_COLOR_MAIN
+                )
+            }
+            1 -> { // €/h: [prev. | atual]
+                val topLegend = "€/h prev."
+                val bottomLegend = "€/h atual"
+                val prev = calcEuroPerHourPlanned().let { if (it != "--.-") "€ $it" else "€ --.-" }
+                val currVal = currentValuePerHour?.let { "€ " + dfHour1.format(it) } ?: "€ --.-"
+                drawTwoLinesWithLegends(
+                    canvas, cx, cy, radius,
+                    topLegend, prev, TEXT_COLOR_MAIN,
+                    bottomLegend, currVal, ratingToColor(currentHourRating)
+                )
+            }
+            2 -> { // ESTÁTICO: €/km (cor) + km totais (preto)
+                val topLegend = "€/km"
+                val eurKm = initialValuePerKm?.let { "€ " + dfEurKm.format(it) } ?: "€ --.--"
+                val kmLegend = "km"
+                val kmShow = initialTotalDistance?.let { dfKm1.format(it) + " km" } ?: "--.- km"
+                drawTwoLinesWithLegends(
+                    canvas, cx, cy, radius,
+                    topLegend, eurKm, ratingToColor(initialKmRating),
+                    kmLegend, kmShow, TEXT_COLOR_MAIN
+                )
+            }
+            else -> { // Oferta
+                val legend = "oferta"
+                val valStr = parseOfferValue()?.let { "€ " + dfVal.format(it) }
+                    ?: offerValueRaw?.let { "€ " + it.replace("€","").trim() }
+                    ?: "€ --"
+                drawSingleLineWithLegend(canvas, cx, cy, radius, legend, valStr)
+            }
         }
-        vpkTextPaint.color = when (initialKmRating) {
-            IndividualRating.GOOD -> VPK_COLOR_GOOD
-            IndividualRating.MEDIUM -> VPK_COLOR_MEDIUM
-            IndividualRating.POOR -> VPK_COLOR_POOR
-            else -> VPK_COLOR_UNKNOWN
-        }
-
-        val wf = width.toFloat()
-        val hf = height.toFloat()
-        cv.drawRoundRect(0f, 0f, wf, hf, borderRadiusPx, borderRadiusPx, backgroundPaint)
-        cv.drawRoundRect(0f, 0f, wf, hf, borderRadiusPx, borderRadiusPx, borderPaint)
-
-        valueTextPaint.textAlign = Paint.Align.LEFT
-        vphTextPaint.textAlign = Paint.Align.LEFT
-        vpkTextPaint.textAlign = Paint.Align.LEFT
-
-        val tX = paddingPx
-        val tBH = (textHeight * 6) + (lineSpacingPx * 5)
-        var cY = ((hf - tBH) / 2f) + textHeight - valueTextPaint.descent()
-
-        cv.drawText("€/h: ${currentValuePerHour?.let { String.format(Locale.US, "%.1f", it) } ?: PLACEHOLDER_TEXT}", tX, cY, vphTextPaint)
-        cY += textHeight + lineSpacingPx
-
-        val h = TimeUnit.SECONDS.toHours(elapsedTimeSeconds)
-        val m = TimeUnit.SECONDS.toMinutes(elapsedTimeSeconds) % 60
-        val s = elapsedTimeSeconds % 60
-        cv.drawText(String.format(Locale.getDefault(), "Decorrido: %02d:%02d:%02d", h, m, s), tX, cY, valueTextPaint)
-        cY += textHeight + lineSpacingPx
-
-        cv.drawText("€/km Ini: ${initialValuePerKm?.let { String.format(Locale.US, "%.2f", it) } ?: PLACEHOLDER_TEXT}", tX, cY, vpkTextPaint)
-        cY += textHeight + lineSpacingPx
-
-        cv.drawText("Dist Ini: ${initialTotalDistance?.let { String.format(Locale.US, "%.1f km", it) } ?: PLACEHOLDER_TEXT}", tX, cY, valueTextPaint)
-        cY += textHeight + lineSpacingPx
-
-        cv.drawText("Tempo Ini: ${initialTotalDurationMinutes?.let { "$it m" } ?: PLACEHOLDER_TEXT}", tX, cY, valueTextPaint)
-        cY += textHeight + lineSpacingPx
-
-        cv.drawText("Valor: ${offerValue?.takeIf { it.isNotEmpty() }?.let { "$it €" } ?: PLACEHOLDER_TEXT}", tX, cY, valueTextPaint)
     }
 
-    private fun updateTextPaintSizes() {
-        val scaled = resources.displayMetrics.scaledDensity
-        val calcSize = TEXT_SIZE_SP * scaled
-        if (kotlin.math.abs(valueTextPaint.textSize - calcSize) > 0.1f) {
-            valueTextPaint.textSize = calcSize
-            vphTextPaint.textSize = calcSize
-            vpkTextPaint.textSize = calcSize
-            textHeight = valueTextPaint.descent() - valueTextPaint.ascent()
+    private fun applyClampedPosition(targetX: Int, targetY: Int) {
+        val maxX = screenW - measuredWidth - safeMarginPx
+        val minX = safeMarginPx
+        val clampedX = max(minX, min(targetX, maxX))
+
+        val minY = safeMarginPx
+        val maxY = ((screenH * TOP_BAND_RATIO) - measuredHeight - safeMarginPx).toInt()
+        val clampedY = max(minY, min(targetY, maxY))
+
+        layoutParams.x = clampedX
+        layoutParams.y = clampedY
+        mainHandler.post {
+            try { if (isAttachedToWindow) windowManager.updateViewLayout(this@TrackingOverlayView, layoutParams) } catch (_: Exception) {}
         }
+    }
+
+    private fun drawTwoLinesWithLegends(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        legendTop: String,
+        lineTop: String,
+        colorTop: Int,
+        legendBottom: String,
+        lineBottom: String,
+        colorBottom: Int
+    ) {
+        val box = (radius - paddingPx) * 2f
+
+        var mainSize = MAIN_TEXT_SP * resources.displayMetrics.scaledDensity
+        var legSize = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
+
+        mainPaint.textSize = mainSize
+        legendPaint.textSize = legSize
+        recalcTextMetrics()
+
+        fun widest(): Float {
+            val w1 = maxOf(mainPaint.measureText(lineTop), legendPaint.measureText(legendTop))
+            val w2 = maxOf(mainPaint.measureText(lineBottom), legendPaint.measureText(legendBottom))
+            return maxOf(w1, w2)
+        }
+
+        fun totalHeight(): Float {
+            val gapLegend = paddingPx * 0.1f
+            val gapMain = paddingPx * 0.18f
+            val topBlock = legendTextHeight + gapLegend + mainTextHeight
+            val bottomBlock = if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
+            else legendTextHeight + gapLegend + mainTextHeight
+            return topBlock + (if (bottomBlock == 0f) 0f else gapMain + bottomBlock)
+        }
+
+        var attempts = 0
+        while ((widest() > box || totalHeight() > box) && attempts < 28) {
+            mainSize *= 0.92f
+            legSize *= 0.92f
+            mainPaint.textSize = mainSize
+            legendPaint.textSize = legSize
+            recalcTextMetrics()
+            attempts++
+        }
+
+        legendPaint.textAlign = Paint.Align.CENTER
+        mainPaint.textAlign = Paint.Align.CENTER
+
+        val gapLegend = paddingPx * 0.1f
+        val gapMain = paddingPx * 0.18f
+
+        val topBlock = legendTextHeight + gapLegend + mainTextHeight
+        val bottomBlock = if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
+        else legendTextHeight + gapLegend + mainTextHeight
+        val total = topBlock + (if (bottomBlock == 0f) 0f else gapMain + bottomBlock)
+
+        var y = cy - total / 2f
+
+        if (legendTop.isNotBlank()) {
+            val yLegTop = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
+            canvas.drawText(legendTop, cx, yLegTop, legendPaint)
+            y += legendTextHeight + gapLegend
+        }
+        mainPaint.color = colorTop
+        val yTop = y - (mainPaint.descent() + mainPaint.ascent()) / 2f + mainTextHeight / 2f
+        canvas.drawText(lineTop, cx, yTop, mainPaint)
+        y += mainTextHeight
+
+        if (!(lineBottom.isBlank() && legendBottom.isBlank())) {
+            y += gapMain
+            if (legendBottom.isNotBlank()) {
+                val yLegBottom = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
+                canvas.drawText(legendBottom, cx, yLegBottom, legendPaint)
+                y += legendTextHeight + gapLegend
+            }
+            mainPaint.color = colorBottom
+            val yBottom = y - (mainPaint.descent() + mainPaint.ascent()) / 2f + mainTextHeight / 2f
+            canvas.drawText(lineBottom, cx, yBottom, mainPaint)
+        }
+        mainPaint.color = TEXT_COLOR_MAIN
+    }
+
+    private fun drawSingleLineWithLegend(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        radius: Float,
+        legend: String,
+        line: String
+    ) {
+        var mainSize = MAIN_TEXT_SP * resources.displayMetrics.scaledDensity
+        var legSize = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
+
+        mainPaint.textSize = mainSize
+        legendPaint.textSize = legSize
+        recalcTextMetrics()
+
+        val box = (radius - paddingPx) * 2f
+        fun widest() = maxOf(mainPaint.measureText(line), legendPaint.measureText(legend))
+        fun totalHeight(): Float {
+            val gapLegend = paddingPx * 0.12f
+            return legendTextHeight + gapLegend + mainTextHeight
+        }
+        var attempts = 0
+        while ((widest() > box || totalHeight() > box) && attempts < 28) {
+            mainSize *= 0.92f
+            legSize *= 0.92f
+            mainPaint.textSize = mainSize
+            legendPaint.textSize = legSize
+            recalcTextMetrics(); attempts++
+        }
+
+        legendPaint.textAlign = Paint.Align.CENTER
+        mainPaint.textAlign = Paint.Align.CENTER
+
+        val gapLegend = paddingPx * 0.12f
+        val total = legendTextHeight + gapLegend + mainTextHeight
+        var y = cy - total / 2f
+
+        val yLeg = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
+        canvas.drawText(legend, cx, yLeg, legendPaint)
+        y += legendTextHeight + gapLegend
+
+        val yVal = y - (mainPaint.descent() + mainPaint.ascent()) / 2f + mainTextHeight / 2f
+        canvas.drawText(line, cx, yVal, mainPaint)
+    }
+
+    private fun ratingToColor(r: IndividualRating): Int = when (r) {
+        IndividualRating.GOOD -> METRIC_COLOR_GOOD
+        IndividualRating.MEDIUM -> METRIC_COLOR_MEDIUM
+        IndividualRating.POOR -> METRIC_COLOR_POOR
+        else -> METRIC_COLOR_UNKNOWN
+    }
+
+    private fun formatHM(minutes: Int): String {
+        val h = minutes / 60
+        val m = minutes % 60
+        return String.format(Locale.getDefault(), "%dh%02d", h, m)
+    }
+
+    private fun formatElapsedHM(seconds: Long): String {
+        val h = TimeUnit.SECONDS.toHours(seconds)
+        val m = TimeUnit.SECONDS.toMinutes(seconds) % 60
+        val s = seconds % 60
+        return if (h == 0L) String.format(Locale.getDefault(), "%02dm%02d", m, s)
+        else String.format(Locale.getDefault(), "%dh%02d", h, m)
+    }
+
+    private fun parseOfferValue(): Double? {
+        val raw = offerValueRaw?.trim()?.replace("€", "") ?: return null
+        val norm = raw.replace(",", ".").replace(Regex("[^0-9\\.]"), "")
+        return norm.toDoubleOrNull()
+    }
+
+    private fun calcEuroPerHourPlanned(): String {
+        val valNum = parseOfferValue()
+        val durMin = initialTotalDurationMinutes
+        if (valNum == null || durMin == null || durMin <= 0) return "--.-"
+        val hours = durMin.toDouble() / 60.0
+        if (hours <= 0.0) return "--.-"
+        return dfHour1.format(valNum / hours)
     }
 }

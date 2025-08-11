@@ -12,9 +12,13 @@ import android.view.*
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.ImageView.ScaleType
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.smartdriver.*
+import com.example.smartdriver.SettingsActivity
+import com.example.smartdriver.OfferManager
 import com.example.smartdriver.utils.*
 import java.text.NumberFormat
 import java.util.*
@@ -55,6 +59,7 @@ class OverlayService : Service() {
         const val EXTRA_FONT_SIZE = "font_size"
         const val EXTRA_TRANSPARENCY = "transparency"
         const val EXTRA_SHIFT_TARGET = "shift_target_extra"
+        const val EXTRA_OVERLAY_Y_OFFSET = "extra_overlay_y_offset"
 
         const val HISTORY_PREFS_NAME = "SmartDriverHistoryPrefs"
         const val KEY_TRIP_HISTORY = "trip_history_list_json"
@@ -96,14 +101,32 @@ class OverlayService : Service() {
             minimumFractionDigits = 2; maximumFractionDigits = 2
         }
 
-    // Rect real da drop zone (coordenadas absolutas de ecrã)
     private var dropZoneRect: Rect? = null
-
-    // ---- NOVO: evita repetir banner de "Meta atingida" no mesmo turno
     private var hasShownTargetReachedBanner = false
+
+    // Fade do semáforo
+    private val overlayFadeHandler = Handler(Looper.getMainLooper())
+    private val fadeToken = Any()
+    private var baseOverlayAlpha: Float = 1.0f
+    private var fadedAlpha: Float = 0.15f
+    private var fadeDelayMs: Long = 10_000L
+    private var fadeAnimMs: Long = 400L
+
+    // Banners topo (sucesso/aviso/info)
+    private lateinit var bannerManager: BannerManager
+
+    // Indicador topo "Oferta em fila" (só informação; sem fila real)
+    private var offerIndicatorView: View? = null
+    private var hasActiveOffer: Boolean = false
+    private var isMainOverlayTranslucent: Boolean = false
+
+    // Offset dinâmico para não tapar o semáforo
+    private var baseOverlayYOffsetPx: Int = 0
+    private var extraTopInsetPx: Int = 0
 
     override fun onCreate() {
         super.onCreate()
+        isRunning.set(true)
         shiftSession = ShiftSession(this)
         setupTripTracker()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -111,6 +134,8 @@ class OverlayService : Service() {
         loadTrackingThresholds()
         initializeAllLayoutParams()
         setupRunnables()
+        bannerManager = BannerManager(this)
+
         startForeground(NOTIFICATION_ID, createNotification(getString(R.string.notification_overlay_ready)))
         addFloatingIconOverlay()
         if (shiftSession.isActive && !shiftSession.isPaused) startShiftTimer()
@@ -128,21 +153,25 @@ class OverlayService : Service() {
                 trackingOverlayView?.updateRealTimeData(currentVph, currentHourRating, elapsedSeconds)
             }
             override fun onTripFinished(historyEntry: TripHistoryEntry) {
+                OfferManager.getInstance(applicationContext).setTrackingActive(false)
+
                 shiftSession.addTripEarnings(historyEntry.offerValue ?: 0.0)
                 hideTrackingOverlay()
                 removeDropZoneView()
+                hideOfferIndicator()
                 updateMenuViewShiftUI()
                 updateShiftNotification()
-                // --- NOVO: banner “Viagem registada”
+
                 val inc = historyEntry.offerValue?.takeIf { it > 0.0 }?.let { currencyFormatter.format(it) }
                 showOverlayBanner(if (inc != null) "Viagem registada: +$inc" else "Viagem registada", OverlayView.BannerType.SUCCESS, 2500)
             }
             override fun onTripDiscarded() {
+                OfferManager.getInstance(applicationContext).setTrackingActive(false)
                 hideTrackingOverlay()
                 removeDropZoneView()
+                hideOfferIndicator()
                 updateShiftNotification()
                 Toast.makeText(this@OverlayService, getString(R.string.toast_tracking_discarded), Toast.LENGTH_SHORT).show()
-                // --- NOVO: banner “Viagem descartada”
                 showOverlayBanner("Viagem descartada", OverlayView.BannerType.WARNING, 2000)
             }
         })
@@ -156,7 +185,6 @@ class OverlayService : Service() {
                     if (shiftSession.isActive) {
                         hasShownTargetReachedBanner = false
                         startShiftTimer(); updateMenuViewShiftUI(); updateShiftNotification()
-                        // --- NOVO: banner ao iniciar turno
                         showOverlayBanner("Turno iniciado", OverlayView.BannerType.INFO, 1500)
                     } else {
                         Toast.makeText(this, getString(R.string.toast_invalid_target_value), Toast.LENGTH_LONG).show()
@@ -189,15 +217,27 @@ class OverlayService : Service() {
         if (tripTracker.isTracking) tripTracker.discard()
         shiftSession.onServiceDestroyed()
         removeAllOverlays()
+        isRunning.set(false)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun handleStartTracking(intent: Intent?) {
+        if (isTrackingOverlayAdded && trackingOverlayView != null) {
+            showOverlayBanner("Já existe uma viagem em acompanhamento", OverlayView.BannerType.INFO, 1800)
+            return
+        }
+        if (tripTracker.isTracking) {
+            showOverlayBanner("Acompanhamento já em curso", OverlayView.BannerType.INFO, 1800)
+            return
+        }
+
         val offerData = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java)
         val initialEval = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
         if (offerData != null && initialEval != null) {
-            hideMainOverlay(); removeQuickMenuOverlay()
+            hideMainOverlay()
+            removeQuickMenuOverlay()
+
             val initialVpk = offerData.calculateProfitability()
             showTrackingOverlay(
                 initialVpk,
@@ -207,35 +247,90 @@ class OverlayService : Service() {
                 initialEval.kmRating,
                 initialEval.combinedBorderRating
             )
+
+            trackingOverlayView?.post { trackingOverlayView?.snapToTopRight() }
+
             tripTracker.start(offerData, initialEval)
+            OfferManager.getInstance(applicationContext).setTrackingActive(true)
+            hideOfferIndicator()
             updateShiftNotification()
-            // --- NOVO: banner informativo (aparece no próximo showMainOverlay; aqui pode não haver overlay principal visível)
             showOverlayBanner("Tracking iniciado", OverlayView.BannerType.INFO, 1500)
         }
     }
-    private fun handleStopTracking() { tripTracker.stopAndSave(); removeDropZoneView() }
-    private fun handleDiscardCurrentTracking() { tripTracker.discard(); removeDropZoneView() }
-    private fun handleHideOverlay() { if (tripTracker.isTracking) tripTracker.stopAndSave(); removeAllOverlays(); updateShiftNotification() }
+
+    private fun handleStopTracking() {
+        tripTracker.stopAndSave()
+        OfferManager.getInstance(applicationContext).setTrackingActive(false)
+        removeDropZoneView()
+    }
+
+    private fun handleDiscardCurrentTracking() {
+        tripTracker.discard()
+        OfferManager.getInstance(applicationContext).setTrackingActive(false)
+        removeDropZoneView()
+    }
+
+    private fun handleHideOverlay() {
+        if (tripTracker.isTracking) tripTracker.stopAndSave()
+        OfferManager.getInstance(applicationContext).setTrackingActive(false)
+        removeAllOverlays()
+        updateShiftNotification()
+    }
+
     private fun handleShowOverlay(intent: Intent?) {
         val evalResult = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
         val offerData = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java)
-        if (evalResult != null && offerData != null) { showMainOverlay(evalResult, offerData); updateShiftNotification() }
+        if (evalResult != null && offerData != null) {
+            showMainOverlay(evalResult, offerData)
+            updateShiftNotification()
+
+            // reset do estado
+            overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
+            mainOverlayView?.alpha = baseOverlayAlpha
+            isMainOverlayTranslucent = false
+            hasActiveOffer = true
+            hideOfferIndicator()
+
+            startOverlayFadeTimer()
+            updateMainOverlayY()
+        }
     }
     private fun handleDismissMainOverlayOnly() { hideMainOverlay() }
+
     private fun handleUpdateSettings(intent: Intent?) {
         loadTrackingThresholds()
+
         val nFS = intent?.getIntExtra(EXTRA_FONT_SIZE, SettingsActivity.getFontSize(this))
             ?: SettingsActivity.getFontSize(this)
         val nT = intent?.getIntExtra(EXTRA_TRANSPARENCY, SettingsActivity.getTransparency(this))
             ?: SettingsActivity.getTransparency(this)
-        applyAppearanceSettings(nFS, nT); updateLayouts(); updateMenuViewShiftUI()
+
+        applyAppearanceSettings(nFS, nT)
+        updateLayouts()
+
+        baseOverlayAlpha = (1.0f - (nT / 100f)).coerceIn(0f, 1f)
+        fadedAlpha = (baseOverlayAlpha * 0.60f).coerceAtLeast(0.25f)
+        mainOverlayView?.alpha = baseOverlayAlpha
+
+        val yFromIntent = intent?.getIntExtra(EXTRA_OVERLAY_Y_OFFSET, -1) ?: -1
+        val yDp = if (yFromIntent >= 0) yFromIntent else SettingsActivity.getOverlayYOffsetDp(this)
+        val density = resources.displayMetrics.density
+        mainLayoutParams.y = (yDp * density).toInt()
+        baseOverlayYOffsetPx = mainLayoutParams.y
+        updateMainOverlayY()
+
+        if (isMainOverlayAdded && mainOverlayView != null) {
+            try { windowManager?.updateViewLayout(mainOverlayView, mainLayoutParams) } catch (_: Exception) {}
+        }
     }
+
     private fun handleShowQuickMenu() { addQuickMenuOverlay() }
     private fun handleDismissMenu() { removeQuickMenuOverlay() }
     private fun handleShutdownRequest() {
         shiftSession.end(saveSummary = false)
         hasShownTargetReachedBanner = false
         if (tripTracker.isTracking) tripTracker.stopAndSave()
+        OfferManager.getInstance(applicationContext).setTrackingActive(false)
         removeAllOverlays()
         stopService(Intent(this, ScreenCaptureService::class.java))
         MediaProjectionData.clear()
@@ -250,11 +345,9 @@ class OverlayService : Service() {
             shiftSession.togglePauseResume()
             if (!shiftSession.isPaused) {
                 startShiftTimer()
-                // --- NOVO: retoma
                 showOverlayBanner("Turno retomado", OverlayView.BannerType.INFO, 1500)
             } else {
                 stopShiftTimer()
-                // --- NOVO: pausa
                 showOverlayBanner("Em pausa", OverlayView.BannerType.INFO, 1500)
             }
             updateMenuViewShiftUI(); updateShiftNotification()
@@ -265,11 +358,11 @@ class OverlayService : Service() {
             shiftSession.end(saveSummary = true)
             hasShownTargetReachedBanner = false
             updateMenuViewShiftUI(); updateShiftNotification()
-            // --- NOVO: fim de turno
             showOverlayBanner("Turno terminado", OverlayView.BannerType.INFO, 1500)
         }
     }
 
+    // ---------- LayoutParams ----------
     private fun initializeAllLayoutParams() {
         val density = resources.displayMetrics.density
         val oT = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -277,12 +370,18 @@ class OverlayService : Service() {
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         val bF = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
 
+        val yDp = SettingsActivity.getOverlayYOffsetDp(this)
+
         mainLayoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             oT, bF or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (50 * density).toInt() }
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = (yDp * density).toInt()
+        }
+        baseOverlayYOffsetPx = mainLayoutParams.y
 
         trackingLayoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -312,6 +411,78 @@ class OverlayService : Service() {
         ).apply { gravity = Gravity.TOP or Gravity.START; x = (10 * density).toInt(); y = (10 * density).toInt() }
     }
 
+    private fun removeAllOverlays() {
+        hideMainOverlay(); hideTrackingOverlay(); removeDropZoneView(); removeQuickMenuOverlay(); removeFloatingIconOverlay(); hideOfferIndicator()
+    }
+
+    private fun showMainOverlay(eR: EvaluationResult, oD: OfferData) {
+        val wm = windowManager ?: return
+        if (mainOverlayView == null) { mainOverlayView = OverlayView(this); applyAppearanceSettingsToView(mainOverlayView) }
+
+        val tPercent = SettingsActivity.getTransparency(this)
+        baseOverlayAlpha = (1.0f - (tPercent / 100f)).coerceIn(0f, 1f)
+        fadedAlpha = (baseOverlayAlpha * 0.25f).coerceAtLeast(0.08f)
+
+        mainOverlayView?.alpha = baseOverlayAlpha
+        mainOverlayView?.updateState(eR, oD)
+
+        // Interações: voltar opaco e esconder indicador
+        mainOverlayView?.setOnClickListener {
+            overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
+            mainOverlayView?.alpha = baseOverlayAlpha
+            isMainOverlayTranslucent = false
+            hideOfferIndicator()
+            startOverlayFadeTimer()
+        }
+        mainOverlayView?.setOnTouchListener { _, _ ->
+            overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
+            mainOverlayView?.alpha = baseOverlayAlpha
+            isMainOverlayTranslucent = false
+            hideOfferIndicator()
+            startOverlayFadeTimer()
+            false
+        }
+
+        try {
+            if (!isMainOverlayAdded) { wm.addView(mainOverlayView, mainLayoutParams); isMainOverlayAdded = true }
+            else wm.updateViewLayout(mainOverlayView, mainLayoutParams)
+        } catch (_: Exception) { isMainOverlayAdded = false; mainOverlayView = null }
+
+        updateMainOverlayY()
+    }
+
+    private fun hideMainOverlay() {
+        hasActiveOffer = false
+        isMainOverlayTranslucent = false
+        hideOfferIndicator()
+
+        if (isMainOverlayAdded && mainOverlayView != null && windowManager != null) {
+            try { windowManager?.removeViewImmediate(mainOverlayView) } catch (_: Exception) {} finally {
+                isMainOverlayAdded = false; mainOverlayView = null
+            }
+        }
+    }
+
+    private fun showTrackingOverlay(
+        iV: Double?, iD: Double?, iDu: Int?, oV: String?, iKR: IndividualRating, cB: BorderRating
+    ) {
+        val wm = windowManager ?: return
+        if (trackingOverlayView == null) { trackingOverlayView = TrackingOverlayView(this, wm, trackingLayoutParams); applyAppearanceSettingsToView(trackingOverlayView) }
+        trackingOverlayView?.updateInitialData(iV, iD, iDu, oV, iKR, cB)
+        try {
+            if (!isTrackingOverlayAdded && trackingOverlayView != null) { wm.addView(trackingOverlayView, trackingLayoutParams); isTrackingOverlayAdded = true }
+            else if (isTrackingOverlayAdded && trackingOverlayView != null) { wm.updateViewLayout(trackingOverlayView, trackingLayoutParams) }
+        } catch (_: Exception) { isTrackingOverlayAdded = false; trackingOverlayView = null }
+    }
+    private fun hideTrackingOverlay() {
+        if (isTrackingOverlayAdded && trackingOverlayView != null && windowManager != null) {
+            try { windowManager?.removeViewImmediate(trackingOverlayView) } catch (_: Exception) {} finally {
+                isTrackingOverlayAdded = false; trackingOverlayView = null
+            }
+        }
+    }
+
+    // ---------- Floating icon / menu ----------
     @SuppressLint("ClickableViewAccessibility")
     private fun addFloatingIconOverlay() {
         if (windowManager == null || isFloatingIconAdded) return
@@ -348,46 +519,6 @@ class OverlayService : Service() {
         if (isQuickMenuAdded && quickMenuView != null && windowManager != null) {
             try { windowManager?.removeViewImmediate(quickMenuView) } catch (_: Exception) {} finally {
                 isQuickMenuAdded = false; quickMenuView = null
-            }
-        }
-    }
-
-    private fun removeAllOverlays() {
-        hideMainOverlay(); hideTrackingOverlay(); removeDropZoneView(); removeQuickMenuOverlay(); removeFloatingIconOverlay()
-    }
-
-    private fun showMainOverlay(eR: EvaluationResult, oD: OfferData) {
-        val wm = windowManager ?: return
-        if (mainOverlayView == null) { mainOverlayView = OverlayView(this); applyAppearanceSettingsToView(mainOverlayView) }
-        mainOverlayView?.updateState(eR, oD)
-        try {
-            if (!isMainOverlayAdded) { wm.addView(mainOverlayView, mainLayoutParams); isMainOverlayAdded = true }
-            else wm.updateViewLayout(mainOverlayView, mainLayoutParams)
-        } catch (_: Exception) { isMainOverlayAdded = false; mainOverlayView = null }
-    }
-    private fun hideMainOverlay() {
-        if (isMainOverlayAdded && mainOverlayView != null && windowManager != null) {
-            try { windowManager?.removeViewImmediate(mainOverlayView) } catch (_: Exception) {} finally {
-                isMainOverlayAdded = false; mainOverlayView = null
-            }
-        }
-    }
-
-    private fun showTrackingOverlay(
-        iV: Double?, iD: Double?, iDu: Int?, oV: String?, iKR: IndividualRating, cB: BorderRating
-    ) {
-        val wm = windowManager ?: return
-        if (trackingOverlayView == null) { trackingOverlayView = TrackingOverlayView(this, wm, trackingLayoutParams); applyAppearanceSettingsToView(trackingOverlayView) }
-        trackingOverlayView?.updateInitialData(iV, iD, iDu, oV, iKR, cB)
-        try {
-            if (!isTrackingOverlayAdded && trackingOverlayView != null) { wm.addView(trackingOverlayView, trackingLayoutParams); isTrackingOverlayAdded = true }
-            else if (isTrackingOverlayAdded && trackingOverlayView != null) { wm.updateViewLayout(trackingOverlayView, trackingLayoutParams) }
-        } catch (_: Exception) { isTrackingOverlayAdded = false; trackingOverlayView = null }
-    }
-    private fun hideTrackingOverlay() {
-        if (isTrackingOverlayAdded && trackingOverlayView != null && windowManager != null) {
-            try { windowManager?.removeViewImmediate(trackingOverlayView) } catch (_: Exception) {} finally {
-                isTrackingOverlayAdded = false; trackingOverlayView = null
             }
         }
     }
@@ -436,14 +567,10 @@ class OverlayService : Service() {
 
         val density = resources.displayMetrics.density
         val sizePx = (72 * density).toInt()
-        val bottomMarginPx = (24 * density).toInt()
+        val marginPx = (8 * density).toInt()
 
-        val dm = Resources.getSystem().displayMetrics
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
-
-        val x = (screenW - sizePx) / 2
-        val y = screenH - sizePx - bottomMarginPx
+        val x = marginPx
+        val y = marginPx
 
         val lp = WindowManager.LayoutParams(sizePx, sizePx, base.type, base.flags, base.format).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -455,13 +582,17 @@ class OverlayService : Service() {
             dropZoneView = ImageView(this).apply {
                 setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
                 alpha = 0.9f
-                scaleType = ScaleType.CENTER_INSIDE
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
             }
         }
 
         try {
-            if (!isDropZoneViewAdded) { wm.addView(dropZoneView, lp); isDropZoneViewAdded = true }
-            else { wm.updateViewLayout(dropZoneView, lp) }
+            if (!isDropZoneViewAdded) {
+                wm.addView(dropZoneView, lp)
+                isDropZoneViewAdded = true
+            } else {
+                wm.updateViewLayout(dropZoneView, lp)
+            }
             dropZoneView?.visibility = View.VISIBLE
             dropZoneRect = Rect(x, y, x + sizePx, y + sizePx)
         } catch (_: Exception) {
@@ -482,6 +613,7 @@ class OverlayService : Service() {
         if (rect != null && tripTracker.isTracking && touchUpX >= 0 && touchUpY >= 0) {
             if (rect.contains(touchUpX.toInt(), touchUpY.toInt())) {
                 tripTracker.discard()
+                OfferManager.getInstance(applicationContext).setTrackingActive(false)
                 removeDropZoneView()
                 return
             }
@@ -490,7 +622,6 @@ class OverlayService : Service() {
     }
 
     // ---------- Aparência / timers / util ----------
-
     private fun applyAppearanceSettings(fSPercent: Int, tPercent: Int) {
         applyAppearanceSettingsToView(mainOverlayView, fSPercent, tPercent)
         applyAppearanceSettingsToView(trackingOverlayView, null, tPercent)
@@ -546,7 +677,6 @@ class OverlayService : Service() {
             menu.updateExpectedEndTime(calculateAndFormatExpectedEndTime())
         }
 
-        // ---- NOVO: detetar meta atingida e mostrar banner (uma vez)
         if (shiftSession.isActive && !hasShownTargetReachedBanner) {
             val remaining = shiftSession.targetEarnings - shiftSession.totalEarnings
             if (shiftSession.targetEarnings > 0.0 && remaining <= 0.0) {
@@ -624,9 +754,73 @@ class OverlayService : Service() {
         }
     }
 
-    // -------- NOVO: helper de banner no overlay principal --------
+    // -------- Banners topo "curtos" --------
     private fun showOverlayBanner(text: String, type: OverlayView.BannerType, durationMs: Long) {
-        // Só mostra se o overlay principal existir/estiver visível
-        mainOverlayView?.showBanner(text, type, durationMs)
+        bannerManager.show(text, type, durationMs)
+    }
+
+    // ---------- Fade helper ----------
+    private fun startOverlayFadeTimer() {
+        overlayFadeHandler.postAtTime({
+            val v = mainOverlayView ?: return@postAtTime
+            v.animate().alpha(fadedAlpha).setDuration(fadeAnimMs).start()
+            isMainOverlayTranslucent = true
+            // quando ficar translúcido, mostra indicador no topo
+            if (hasActiveOffer) showOfferIndicator()
+        }, fadeToken, SystemClock.uptimeMillis() + fadeDelayMs)
+    }
+
+    // ---------- Indicador topo "Oferta em fila" ----------
+    private fun showOfferIndicator() {
+        if (offerIndicatorView != null || windowManager == null) return
+        val inflater = LayoutInflater.from(this)
+        val view = inflater.inflate(R.layout.banner_center_queued_offer, null) as LinearLayout
+
+        view.findViewById<TextView>(R.id.tvTitle)?.text = getString(R.string.queued_offer)
+
+        // TOQUE NO BANNER → semáforo opaco + reiniciar fade + esconder banner
+        view.setOnClickListener {
+            overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
+            mainOverlayView?.alpha = baseOverlayAlpha
+            isMainOverlayTranslucent = false
+            hideOfferIndicator()
+            startOverlayFadeTimer()
+        }
+
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+
+        val density = resources.displayMetrics.density
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = (24 * density).toInt()
+        }
+
+        try {
+            windowManager?.addView(view, lp)
+            offerIndicatorView = view
+        } catch (_: Exception) {
+            offerIndicatorView = null
+        }
+    }
+
+    private fun hideOfferIndicator() {
+        val v = offerIndicatorView ?: return
+        try { windowManager?.removeViewImmediate(v) } catch (_: Exception) {}
+        offerIndicatorView = null
+    }
+
+    // ---------- Reposicionar semáforo quando há banner ----------
+    private fun updateMainOverlayY() {
+        // no-op: já não deslocamos o semáforo quando o banner aparece
     }
 }

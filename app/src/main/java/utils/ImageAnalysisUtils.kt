@@ -97,7 +97,7 @@ class ImageAnalysisUtils {
         }
 
         val corrected = applyOcrCorrections(raw)
-        val pretty = normalizeSpaces(corrected)         // guardar
+        val pretty = normalizeSpaces(corrected)  // guardar
         val normalized = stripAccentsLower(pretty)      // matching
         val normalizedOneLine = normalized.replace(Regex("\\s+"), " ")
 
