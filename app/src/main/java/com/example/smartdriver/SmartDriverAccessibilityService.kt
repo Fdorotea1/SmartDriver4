@@ -1,55 +1,76 @@
-package com.example.smartdriver // <<< VERIFIQUE O PACKAGE
+package com.example.smartdriver
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityWindowInfo
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
-import android.os.HandlerThread // <<< NOVO IMPORT
+import android.os.HandlerThread
 import android.os.Looper
-import android.os.Process // <<< NOVO IMPORT
+import android.os.Process
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
-import com.example.smartdriver.overlay.OverlayService // Para interagir com o OverlayService
+import com.example.smartdriver.overlay.OverlayService
+import java.text.Normalizer
+import java.util.Locale
 
 class SmartDriverAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "SmartDriverAccess"
         private const val TREE_TAG = "SmartDriverAccessTree"
-        private const val EVENT_LOGGER_TAG = "AccessibilityEventLogger"
 
         @Volatile var isServiceRunning = false
 
         private const val UBER_DRIVER_PACKAGE = "com.ubercab.driver"
-        // Throttling para captura
+
+        // Throttling
+        private const val MIN_DUMP_INTERVAL_MS = 500L
         private const val MIN_CAPTURE_INTERVAL_MS = 1500L
         private const val CAPTURE_DELAY_MS = 200L
-        // Throttling para DUMPS COMPLETOS (evitar spam)
-        private const val MIN_DUMP_INTERVAL_MS = 500L // Intervalo razoável entre dumps
+        private const val MIN_KEYWORD_SCAN_INTERVAL_MS = 400L
+
+        // -------- Keyword ÚNICA (com normalização) --------
+        private val FINISH_KEYWORDS_RAW = arrayOf("Concluir")
+        private val FINISH_KEYWORDS_NORM: List<String> =
+            FINISH_KEYWORDS_RAW.map { normalize(it) }
+
+        private fun normalize(s: String?): String {
+            if (s.isNullOrEmpty()) return ""
+            val n = Normalizer.normalize(s, Normalizer.Form.NFD)
+            return n.replace("\\p{InCombiningDiacriticalMarks}+".toRegex(), "")
+                .lowercase(Locale.ROOT)
+                .trim()
+        }
     }
 
-    // --- Handler principal (para UI e agendamento) ---
+    // Handlers
     private val mainHandler = Handler(Looper.getMainLooper())
-    // --- HandlerThread e Handler para tarefas de acessibilidade pesadas (dump) ---
     private lateinit var accessibilityThread: HandlerThread
     private lateinit var accessibilityHandler: Handler
 
+    // Estado
+    private var lastFullDumpTime = 0L
     private var lastCaptureRequestTime = 0L
     private var captureRequestPending = false
-    private var isTargetAppInForeground = false // Janela PRINCIPAL do Uber ativa
-    private var lastFullDumpTime = 0L
+    private var isTargetAppInForeground = false
+
+    // Estado da keyword "Concluir"
+    private var lastKeywordScanTime = 0L
+    @Volatile private var lastFinishVisible: Boolean = false
+    @Volatile private var keywordScanPending = false
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate - Iniciando HandlerThread de Acessibilidade")
-        // Cria e inicia a thread de background para tarefas pesadas
-        accessibilityThread = HandlerThread("AccessibilityWorkerThread", Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
-        // Cria um Handler associado ao Looper dessa thread
+        Log.d(TAG, "onCreate - Accessibility worker thread")
+        accessibilityThread = HandlerThread(
+            "AccessibilityWorkerThread",
+            Process.THREAD_PRIORITY_BACKGROUND
+        ).apply { start() }
         accessibilityHandler = Handler(accessibilityThread.looper)
     }
 
@@ -65,143 +86,271 @@ class SmartDriverAccessibilityService : AccessibilityService() {
                     AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                     AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                     AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            // Focar em eventos de mudança de janela/estado e conteúdo DO UBER
-            info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                    AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            // Ouvir apenas Uber PODE ser suficiente se a janela overlay pertencer a ele
+            info.eventTypes =
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                        AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             info.packageNames = arrayOf(UBER_DRIVER_PACKAGE)
-            // Se ainda houver problemas, voltar a 'null' para ouvir tudo.
             info.notificationTimeout = 100
             serviceInfo = info
-            Log.d(TAG, "Configurações extras aplicadas. Flags: ${info.flags}, Pkgs: ${info.packageNames?.joinToString()}, EventTypes: STATE/WINDOWS/CONTENT")
+            Log.d(TAG, "ServiceInfo configurado (pkgs=${info.packageNames?.joinToString()})")
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao aplicar configurações extras: ${e.message}")
+            Log.e(TAG, "Erro ao aplicar ServiceInfo: ${e.message}")
         }
-        // Verifica estado inicial após um pequeno delay
+
         mainHandler.postDelayed({ checkIfTargetAppIsForeground() }, 500)
     }
 
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null || !isServiceRunning) return // Ignora se serviço não está ativo
-        val packageName = event.packageName?.toString() ?: "UnknownPackage"
+        if (event == null || !isServiceRunning) return
+
         val eventType = event.eventType
+        val isWindowEvent =
+            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                    eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        val isContentEvent = eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
 
-        // Log básico do evento (apenas para pacotes Uber agora)
-        // Log.v(EVENT_LOGGER_TAG, "[${AccessibilityEvent.eventTypeToString(eventType)}] Pkg=$packageName, Class=${event.className ?: "N/A"}, WinID=${event.windowId}")
-
-        // Eventos que disparam dump (mudança de janela/estado)
-        val isWindowEvent = eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-                eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
-
-        // Evento de conteúdo (apenas para captura)
-        val isUberContentEvent = eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-
-        val currentTime = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
 
         if (isWindowEvent) {
-            Log.w(TAG, ">>> Evento ${AccessibilityEvent.eventTypeToString(eventType)} detectado! Agendando DUMP COMPLETO (Throttled) na background thread. <<<")
-            // Tenta fazer dump completo, respeitando o throttling, NA BACKGROUND THREAD
-            if (currentTime - lastFullDumpTime > MIN_DUMP_INTERVAL_MS) {
-                lastFullDumpTime = currentTime
-                // Posta a tarefa de dump para a thread de acessibilidade
+            // Dump (para debug) com throttling – corre na background thread
+            if (now - lastFullDumpTime > MIN_DUMP_INTERVAL_MS) {
+                lastFullDumpTime = now
                 accessibilityHandler.post { executeTreeDumpAllAttempt() }
-            } else {
-                Log.v(TREE_TAG, "Dump completo ignorado para ${AccessibilityEvent.eventTypeToString(eventType)} (Throttling)")
             }
-            // Reavalia o estado do foreground após mudança de janela
-            mainHandler.post { checkIfTargetAppIsForeground() }
-            // Agenda captura se necessário (após verificar foreground)
-            mainHandler.post { if (isTargetAppInForeground) requestScreenCapture(CAPTURE_DELAY_MS) }
-
-        } else if (isUberContentEvent) {
-            // Evento de conteúdo apenas dispara captura (sem dump)
+            // Reavaliar foreground + pedir captura
+            mainHandler.post {
+                checkIfTargetAppIsForeground()
+                if (isTargetAppInForeground) requestScreenCapture(CAPTURE_DELAY_MS)
+            }
+            // Agendar varredura de keyword
+            scheduleKeywordScan()
+        } else if (isContentEvent) {
             if (isTargetAppInForeground) {
-                // Log.v(TAG, "Content change, requesting capture...")
                 requestScreenCapture(CAPTURE_DELAY_MS)
+                scheduleKeywordScan()
             }
         }
-        // Não precisamos mais verificar saída aqui se ouvimos apenas Uber,
-        // a lógica em checkIfTargetAppIsForeground trata disso.
     }
 
-    /** Verifica se a janela principal do Uber está ativa e atualiza estado */
-    private fun checkIfTargetAppIsForeground() {
-        if (!isServiceRunning) return // Não faz nada se o serviço foi destruído
-
-        val activeUberAppWindow = findActiveUberAppWindow()
-        val uberIsNowForeground = activeUberAppWindow != null
-
-        // Loga apenas na transição de estado
-        if (uberIsNowForeground && !isTargetAppInForeground) {
-            Log.i(TAG, ">>> App Uber (Janela Principal) ENTROU em primeiro plano <<<")
-            isTargetAppInForeground = true
-            // Limpa estado/overlay SÓ se o estado anterior era 'fora'
-            OfferManager.getInstance(applicationContext).clearLastOfferState()
-            // Não esconder overlay aqui automaticamente, deixa o OfferManager controlar
-            // hideOverlayIndicator()
-        } else if (!uberIsNowForeground && isTargetAppInForeground) {
-            Log.i(TAG, "<<< App Uber (Janela Principal) SAIU de primeiro plano >>>")
-            isTargetAppInForeground = false
-            handleAppExitActions()
-        } else {
-            // Apenas atualiza o estado se não houve transição
-            isTargetAppInForeground = uberIsNowForeground
-        }
-    }
-
-    /** Ações de limpeza ao sair do app */
-    private fun handleAppExitActions() {
-        hideOverlayIndicator() // Esconde overlay ao sair do app
-        // Limpa posts pendentes nos handlers
+    override fun onInterrupt() {
+        Log.w(TAG, "Serviço de Acessibilidade INTERROMPIDO")
+        isServiceRunning = false
         mainHandler.removeCallbacksAndMessages(null)
-        if (::accessibilityHandler.isInitialized) {
+        if (::accessibilityThread.isInitialized && accessibilityThread.isAlive) {
             accessibilityHandler.removeCallbacksAndMessages(null)
         }
         captureRequestPending = false
-        Log.d(TAG, "Ações pendentes (captura, dump) canceladas ao sair do app.")
+        // Ao interromper, considera a keyword como não visível
+        if (lastFinishVisible) {
+            lastFinishVisible = false
+            broadcastFinishVisible(false, "interrupt")
+        }
     }
 
-    /** Encontra a primeira janela ATIVA do Uber que seja do tipo APP */
+    override fun onDestroy() {
+        super.onDestroy()
+        isServiceRunning = false
+        Log.w(TAG, ">>> Serviço de Acessibilidade DESTRUÍDO <<<")
+        mainHandler.removeCallbacksAndMessages(null)
+        if (::accessibilityThread.isInitialized && accessibilityThread.isAlive) {
+            accessibilityHandler.removeCallbacksAndMessages(null)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                accessibilityThread.quitSafely()
+            } else {
+                @Suppress("DEPRECATION")
+                accessibilityThread.quit()
+            }
+            Log.d(TAG, "AccessibilityWorkerThread finalizada.")
+        }
+        captureRequestPending = false
+        if (lastFinishVisible) {
+            lastFinishVisible = false
+            broadcastFinishVisible(false, "destroy")
+        }
+    }
+
+    // ---------- Foreground / Janela alvo ----------
+    private fun checkIfTargetAppIsForeground() {
+        if (!isServiceRunning) return
+        val activeUberAppWindow = findActiveUberAppWindow()
+        val nowForeground = activeUberAppWindow != null
+
+        if (nowForeground && !isTargetAppInForeground) {
+            Log.i(TAG, ">>> Uber em primeiro plano <<<")
+            isTargetAppInForeground = true
+            // reset de estado visual (o Overlay gere o resto)
+        } else if (!nowForeground && isTargetAppInForeground) {
+            Log.i(TAG, "<<< Uber saiu de primeiro plano >>>")
+            isTargetAppInForeground = false
+            // Se sair do app, marca keyword como não visível
+            if (lastFinishVisible) {
+                lastFinishVisible = false
+                broadcastFinishVisible(false, "bg-exit")
+            }
+        } else {
+            isTargetAppInForeground = nowForeground
+        }
+    }
+
     private fun findActiveUberAppWindow(): AccessibilityWindowInfo? {
-        // Lógica interna inalterada...
-        val currentWindows: List<AccessibilityWindowInfo>? = try { this.windows } catch (e: Exception) { null }
+        val currentWindows: List<AccessibilityWindowInfo>? =
+            try { this.windows } catch (e: Exception) { null }
+
         return currentWindows?.find { window ->
             var root: AccessibilityNodeInfo? = null
-            var isUberAppActive = false
+            var ok = false
             try {
-                if(window.type == AccessibilityWindowInfo.TYPE_APPLICATION && window.isActive) {
+                if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION && window.isActive) {
                     root = window.root
-                    isUberAppActive = root?.packageName == UBER_DRIVER_PACKAGE
+                    ok = (root?.packageName == UBER_DRIVER_PACKAGE)
                 }
-            } catch (e: Exception) {}
-            finally { try { root?.recycle() } catch (e: Exception) {} }
-            isUberAppActive
+            } catch (_: Exception) {
+            } finally {
+                try { root?.recycle() } catch (_: Exception) {}
+            }
+            ok
         }
     }
 
-    /** Executa UMA tentativa de dump da árvore iterando sobre TODAS as janelas (NA BACKGROUND THREAD) */
+    // ---------- Captura (apenas trigger; não mexe em permissões) ----------
+    private fun requestScreenCapture(delayMs: Long) {
+        val now = System.currentTimeMillis()
+        if (now - lastCaptureRequestTime >= MIN_CAPTURE_INTERVAL_MS && !captureRequestPending) {
+            lastCaptureRequestTime = now
+            captureRequestPending = true
+            mainHandler.postDelayed({
+                captureRequestPending = false
+                if (isTargetAppInForeground && isServiceRunning) {
+                    Log.i(TAG, "[CAPTURE TRIGGER] ACTION_CAPTURE_NOW")
+                    val intent = Intent(this, ScreenCaptureService::class.java).apply {
+                        action = ScreenCaptureService.ACTION_CAPTURE_NOW
+                    }
+                    try { startService(intent) } catch (e: Exception) {
+                        Log.e(TAG, "Erro a iniciar ScreenCaptureService: ${e.message}", e)
+                    }
+                }
+            }, delayMs)
+        }
+    }
+
+    // ---------- Varredura por keyword "Concluir" ----------
+    private fun scheduleKeywordScan() {
+        val now = System.currentTimeMillis()
+        if (keywordScanPending || now - lastKeywordScanTime < MIN_KEYWORD_SCAN_INTERVAL_MS) return
+        keywordScanPending = true
+        lastKeywordScanTime = now
+        accessibilityHandler.post {
+            try {
+                val visible = scanWindowsForFinishKeyword()
+                if (visible != lastFinishVisible) {
+                    lastFinishVisible = visible
+                    broadcastFinishVisible(visible, "scan")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro no scan de keyword: ${e.message}")
+            } finally {
+                keywordScanPending = false
+            }
+        }
+    }
+
+    private fun scanWindowsForFinishKeyword(): Boolean {
+        val windows = try { this.windows } catch (e: Exception) { null } ?: return false
+        val bounds = Rect()
+
+        for (window in windows) {
+            val typeOk = window.type == AccessibilityWindowInfo.TYPE_APPLICATION ||
+                    window.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
+            if (!typeOk) continue
+
+            var root: AccessibilityNodeInfo? = null
+            try {
+                root = window.root ?: continue
+                // opcional: ignorar janelas de outros pacotes
+                val pkg = root.packageName?.toString() ?: ""
+                if (pkg.isNotEmpty() && pkg != UBER_DRIVER_PACKAGE &&
+                    window.type != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) {
+                    continue
+                }
+
+                if (nodeTreeContainsFinishKeyword(root, bounds)) {
+                    return true
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { root?.recycle() } catch (_: Exception) {}
+            }
+        }
+        return false
+    }
+
+    private fun nodeTreeContainsFinishKeyword(
+        node: AccessibilityNodeInfo?,
+        tmpBounds: Rect
+    ): Boolean {
+        if (node == null) return false
+
+        // Verificação neste nó
+        try {
+            val visible = node.isVisibleToUser
+            if (visible) {
+                val txt = normalize(
+                    try { node.text?.toString() } catch (_: Exception) { null }
+                )
+                val desc = normalize(
+                    try { node.contentDescription?.toString() } catch (_: Exception) { null }
+                )
+                val hit = FINISH_KEYWORDS_NORM.any { k ->
+                    (txt.contains(k)) || (desc.contains(k))
+                }
+                if (hit) return true
+            }
+        } catch (_: Exception) { }
+
+        // Recursão nos filhos
+        for (i in 0 until node.childCount) {
+            var child: AccessibilityNodeInfo? = null
+            try {
+                child = node.getChild(i)
+                if (nodeTreeContainsFinishKeyword(child, tmpBounds)) return true
+            } catch (_: Exception) {
+            } finally {
+                try { child?.recycle() } catch (_: Exception) {}
+            }
+        }
+        return false
+    }
+
+    private fun broadcastFinishVisible(visible: Boolean, reason: String) {
+        val i = Intent(OverlayService.ACTION_EVT_FINISH_KEYWORD_VISIBLE)
+            .putExtra(OverlayService.EXTRA_FINISH_VISIBLE, visible)
+        try {
+            sendBroadcast(i)
+            Log.d(TAG, "FinishKeyword visible=$visible ($reason)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao enviar broadcast finishVisible=$visible: ${e.message}")
+        }
+    }
+
+    // ---------- Dump (debug, opcional) ----------
     private fun executeTreeDumpAllAttempt() {
-        // Verifica se o serviço ainda está ativo antes de começar
-        if (!isServiceRunning) {
-            Log.w(TREE_TAG, "executeTreeDumpAllAttempt: Serviço não está mais ativo, abortando dump.")
-            return
-        }
-        Log.d(TREE_TAG, "--- [BG Thread] Iniciando Tentativa de Dump de TODAS as Janelas ---")
-        val currentWindows: List<AccessibilityWindowInfo>? = try { this.windows } catch (e: Exception) { Log.e(TAG, "[BG Thread] Erro ao obter janelas: ${e.message}"); null }
+        if (!isServiceRunning) return
+        val currentWindows: List<AccessibilityWindowInfo>? =
+            try { this.windows } catch (e: Exception) {
+                Log.e(TAG, "[BG] Erro ao obter janelas: ${e.message}"); null
+            }
 
-        if (currentWindows == null || currentWindows.isEmpty()) {
-            Log.w(TREE_TAG, "[BG Thread] Nenhuma janela encontrada para fazer o dump.")
+        if (currentWindows.isNullOrEmpty()) {
+            Log.v(TREE_TAG, "[BG] Nenhuma janela para dump.")
             return
         }
 
-        Log.i(TREE_TAG, "[BG Thread] Encontradas ${currentWindows.size} janelas para analisar:")
+        Log.v(TREE_TAG, "[BG] ${currentWindows.size} janelas para análise")
         val windowBounds = Rect()
 
         for ((index, window) in currentWindows.withIndex()) {
-            if (!isServiceRunning) break // Aborta loop se serviço parou
-
+            if (!isServiceRunning) break
             var rootNode: AccessibilityNodeInfo? = null
             val windowId = window.id
             val windowType = windowTypeToString(window.type)
@@ -214,160 +363,61 @@ class SmartDriverAccessibilityService : AccessibilityService() {
                 rootNode = window.root
                 packageName = rootNode?.packageName?.toString() ?: "N/A"
 
-                Log.i(TREE_TAG, "[BG Thread] Analisando Janela ${index + 1}/${currentWindows.size}: ID=$windowId, Pkg=$packageName, Tipo=$windowType, Ativa=$isActive, Focada=$isFocused, Layer=${window.layer}, Bounds=${windowBounds.toShortString()}")
+                Log.v(
+                    TREE_TAG,
+                    "[BG] Janela ${index + 1}/${currentWindows.size}: " +
+                            "ID=$windowId, Pkg=$packageName, Tipo=$windowType, " +
+                            "Ativa=$isActive, Focada=$isFocused, Bounds=${windowBounds.toShortString()}"
+                )
 
-                if (rootNode != null) {
-                    // Só faz o dump detalhado se for do Uber ou um Overlay de Acessibilidade (pode ser o popup)
-                    if (packageName == UBER_DRIVER_PACKAGE || windowType == "A11Y_OVERLAY") {
-                        Log.d(TREE_TAG, "+++ [BG Thread] Dumping Tree for Relevant Window (ID: $windowId, Pkg: $packageName) +++")
-                        logNodeInfoRecursive(rootNode, 0) // Loga a árvore
-                        Log.d(TREE_TAG, "--- [BG Thread] End Tree Dump for Relevant Window (ID: $windowId) ---")
-
-                        // <<< Poderíamos adicionar a busca por keywords aqui, se necessário no futuro >>>
-                        // if (packageName == UBER_DRIVER_PACKAGE && containsOfferKeywords(rootNode)) { ... }
-
-                    } else {
-                        Log.v(TREE_TAG, "[BG Thread] Ignorando dump detalhado para janela não relevante: $packageName")
-                    }
-                } else {
-                    Log.w(TREE_TAG, "[BG Thread] Janela (ID: $windowId, Pkg: $packageName) tem root nulo.")
+                if (rootNode != null &&
+                    (packageName == UBER_DRIVER_PACKAGE || windowType == "A11Y_OVERLAY")) {
+                    logNodeInfoRecursive(rootNode, 0)
                 }
             } catch (e: Exception) {
-                Log.e(TREE_TAG, "[BG Thread] Erro ao obter/processar root da janela ID $windowId (Pkg: $packageName): ${e.message}")
+                Log.e(TREE_TAG, "[BG] Erro processando window $windowId: ${e.message}")
             } finally {
-                // Recicla o nó raiz APÓS o uso
-                try { rootNode?.recycle() } catch (e: Exception) { /* ignore */ }
-            }
-            // Não reciclar 'window' aqui
-        } // Fim do loop for windows
-
-        Log.d(TREE_TAG, "--- [BG Thread] Fim da Tentativa de Dump de TODAS as Janelas ---")
-    }
-
-
-    // --- Função requestScreenCapture (Agendada no mainHandler, executa na sua própria thread) ---
-    private fun requestScreenCapture(delayMs: Long) {
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastCaptureRequestTime >= MIN_CAPTURE_INTERVAL_MS && !captureRequestPending) {
-            lastCaptureRequestTime = currentTime
-            captureRequestPending = true
-            // Posta no mainHandler para agendar, a execução do startService é rápida
-            mainHandler.postDelayed({
-                captureRequestPending = false
-                if (isTargetAppInForeground && isServiceRunning) {
-                    Log.i(TAG, "[CAPTURE TRIGGER] Enviando ACTION_CAPTURE_NOW...")
-                    val intent = Intent(this, ScreenCaptureService::class.java).apply {
-                        action = ScreenCaptureService.ACTION_CAPTURE_NOW
-                    }
-                    try { startService(intent) }
-                    catch (e: Exception) { Log.e(TAG, "Erro ao iniciar ScreenCaptureService: ${e.message}", e) }
-                }
-            }, delayMs)
-        }
-    }
-    // ---------------------------------------------------------------
-
-    // --- hideOverlayIndicator (Executa no mainHandler) ---
-    private fun hideOverlayIndicator() {
-        mainHandler.post { // Garante execução na thread principal
-            if (OverlayService.isRunning.get()) {
-                val intent = Intent(this, OverlayService::class.java).apply {
-                    action = OverlayService.ACTION_HIDE_OVERLAY
-                }
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Erro ao enviar HIDE_OVERLAY: ${e.message}")
-                }
+                try { rootNode?.recycle() } catch (_: Exception) {}
             }
         }
     }
 
-    // --- onInterrupt, onDestroy ---
-    override fun onInterrupt() {
-        Log.w(TAG, "Serviço de Acessibilidade INTERROMPIDO")
-        isServiceRunning = false
-        // Limpa handlers
-        mainHandler.removeCallbacksAndMessages(null)
-        if (::accessibilityThread.isInitialized && accessibilityThread.isAlive) {
-            accessibilityHandler.removeCallbacksAndMessages(null)
-        }
-        captureRequestPending = false
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        isServiceRunning = false
-        Log.w(TAG, ">>> Serviço de Acessibilidade DESTRUÍDO <<<")
-        // Para e limpa handlers e a thread
-        mainHandler.removeCallbacksAndMessages(null)
-        if (::accessibilityThread.isInitialized && accessibilityThread.isAlive) {
-            accessibilityHandler.removeCallbacksAndMessages(null)
-            // Finaliza a thread de background de forma segura
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-                accessibilityThread.quitSafely()
-            } else {
-                @Suppress("DEPRECATION")
-                accessibilityThread.quit()
-            }
-            Log.d(TAG, "AccessibilityWorkerThread finalizada.")
-        }
-        captureRequestPending = false
-        try { hideOverlayIndicator() } catch (e: Exception) { /* Ignorar */ }
-    }
-
-    // --- FUNÇÕES PARA LOG DA ÁRVORE DE NÓS (Executa na accessibilityHandler thread) ---
     private fun logNodeInfoRecursive(node: AccessibilityNodeInfo?, depth: Int) {
-        if (node == null || !isServiceRunning) return // Verifica se serviço ainda corre
+        if (node == null || !isServiceRunning) return
         if (depth > 25) return
 
         val indent = "  ".repeat(depth)
         try {
             val className = node.className?.toString()?.substringAfterLast('.') ?: "N/A"
             val viewId = node.viewIdResourceName ?: "no_id"
-            val nodeText = try { node.text?.toString()?.replace("\n", "\\n")?.take(120) ?: "null" } catch (e: Exception) { "[Error text]" }
-            val contentDesc = try { node.contentDescription?.toString()?.replace("\n", "\\n")?.take(120) ?: "null" } catch (e: Exception) { "[Error desc]" }
+            val nodeText = try { node.text?.toString()?.replace("\n", "\\n")?.take(120) ?: "null" } catch (_: Exception) { "null" }
+            val contentDesc = try { node.contentDescription?.toString()?.replace("\n", "\\n")?.take(120) ?: "null" } catch (_: Exception) { "null" }
             val bounds = Rect()
             var boundsStr = "[N/A]"
-            try { node.getBoundsInScreen(bounds); boundsStr = bounds.toShortString() } catch (e: Exception) {}
-            val isClickable = node.isClickable
-            val isVisible = node.isVisibleToUser
+            try { node.getBoundsInScreen(bounds); boundsStr = bounds.toShortString() } catch (_: Exception) {}
 
-            Log.d(TREE_TAG, "$indent- Class: $className, ID: $viewId, T:\"$nodeText\", D:\"$contentDesc\", B:$boundsStr, C:$isClickable, V:$isVisible")
-
-            // Recursão para filhos
+            Log.v(TREE_TAG, "$indent- Class:$className, ID:$viewId, T:\"$nodeText\", D:\"$contentDesc\", B:$boundsStr, V:${node.isVisibleToUser}")
             for (i in 0 until node.childCount) {
-                if (!isServiceRunning) break // Sai do loop se serviço parou
-                var childNode: AccessibilityNodeInfo? = null
+                var child: AccessibilityNodeInfo? = null
                 try {
-                    childNode = node.getChild(i)
-                    logNodeInfoRecursive(childNode, depth + 1)
-                } catch (e: Exception) {
-                    // Log.e(TREE_TAG, "$indent  Error processing child $i: ${e.message}")
+                    child = node.getChild(i)
+                    logNodeInfoRecursive(child, depth + 1)
+                } catch (_: Exception) {
                 } finally {
-                    try { childNode?.recycle() } catch (e: Exception) {}
+                    try { child?.recycle() } catch (_: Exception) {}
                 }
             }
         } catch (e: Exception) {
-            Log.e(TREE_TAG, "$indent Error processing node: ${e.message}")
-        }
-        // Nó `node` será reciclado por quem chamou
-    }
-
-    /** Converte tipo de janela para String legível */
-    private fun windowTypeToString(type: Int): String {
-        return when (type) {
-            AccessibilityWindowInfo.TYPE_APPLICATION -> "APP"
-            AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "IME"
-            AccessibilityWindowInfo.TYPE_SYSTEM -> "SYS"
-            AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "A11Y_OVERLAY"
-            AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "SPLIT"
-            else -> "UNKNOWN($type)"
+            Log.e(TREE_TAG, "$indent erro no node: ${e.message}")
         }
     }
 
-} // Fim da classe SmartDriverAccessibilityService
+    private fun windowTypeToString(type: Int): String = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> "APP"
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "IME"
+        AccessibilityWindowInfo.TYPE_SYSTEM -> "SYS"
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "A11Y_OVERLAY"
+        AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "SPLIT"
+        else -> "UNKNOWN($type)"
+    }
+}

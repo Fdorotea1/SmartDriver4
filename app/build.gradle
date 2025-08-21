@@ -4,32 +4,60 @@ plugins {
     id 'kotlin-parcelize'
 }
 
+import java.util.Properties
+import java.io.FileInputStream
+
 android {
     namespace 'com.example.smartdriver'
     compileSdk 33
+
+    // --- LER keystore.properties na raiz do projeto ---
+    def keystorePropsFile = rootProject.file("keystore.properties")
+    def keystoreProps = new Properties()
+    if (keystorePropsFile.exists()) {
+        keystoreProps.load(new FileInputStream(keystorePropsFile))
+    }
 
     defaultConfig {
         applicationId 'com.example.smartdriver'
         minSdk 29
         targetSdk 33
+
+        // ⚠️ Sobe estes valores quando fizeres nova release
         versionCode 1
         versionName '1.0'
+
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    // --- CONFIGURAÇÃO DE ASSINATURA (usa a tua .jks automaticamente) ---
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Assinar automaticamente com a tua chave
+            signingConfig signingConfigs.release
         }
         debug {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // (debug normalmente não é assinado com a chave de release)
         }
     }
 
     compileOptions {
-        // Mantemos Java 8 para compatibilidade com o teu projeto
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
@@ -58,7 +86,6 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
     // ✅ ML Kit Standalone (Text Recognition v2)
-    // Remove a dependência Play Services para evitar avisos e conflitos.
     implementation 'com.google.mlkit:text-recognition:16.0.1'
 
     testImplementation 'junit:junit:4.13.2'

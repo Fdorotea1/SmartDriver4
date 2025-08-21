@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
@@ -34,11 +35,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var sharedPreferences: SharedPreferences
 
+    // Guards anti-duplo consentimento
+    private var isRequestingProjection = false
+    private var lastProjectionLaunchAt = 0L
+    private val PROJECTION_LAUNCH_COOLDOWN_MS = 2500L
+    private var currentFlowId = 0L
+
     // Receiver para desligar a app a partir do serviço/menu
     private val shutdownReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ACTION_SHUTDOWN_APP) {
-                Log.w(TAG, "Recebido broadcast $ACTION_SHUTDOWN_APP. Encerrando MainActivity.")
+                Log.w(TAG, "[$currentFlowId] Recebido broadcast $ACTION_SHUTDOWN_APP. Encerrando MainActivity.")
                 finishAffinity()
             }
         }
@@ -80,9 +87,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "onResume - Atualizando UI e estado")
+        Log.d(TAG, "onResume - Atualizando UI (sem normalize/auto-start)")
         updatePermissionStatusUI()
-        normalizeInitialSwitchState()
+        // ⚠️ NÃO chamamos normalizeInitialSwitchState() aqui.
         updateAppStatusUI(sharedPreferences.getBoolean(KEY_APP_ACTIVE, false))
     }
 
@@ -171,35 +178,40 @@ class MainActivity : AppCompatActivity() {
         // MediaProjection (captura de ecrã)
         mediaProjectionLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-                if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-                    Log.d(TAG, "Permissão de captura CONCEDIDA")
-                    MediaProjectionData.resultCode = result.resultCode
-                    MediaProjectionData.resultData = result.data?.clone() as Intent?
-                    Toast.makeText(this, "Permissão de captura concedida!", Toast.LENGTH_SHORT).show()
+                try {
+                    Log.d(TAG, "[$currentFlowId] mediaProjectionLauncher callback: resultCode=${result.resultCode}")
+                    if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                        Log.d(TAG, "[$currentFlowId] Permissão de captura CONCEDIDA")
+                        MediaProjectionData.resultCode = result.resultCode
+                        MediaProjectionData.resultData = result.data?.clone() as Intent?
+                        Toast.makeText(this, "Permissão de captura concedida!", Toast.LENGTH_SHORT).show()
 
-                    // Se o utilizador pretendia ligar, iniciamos serviços e só depois persistimos ON
-                    if (binding.appStatusSwitch.isChecked) {
-                        val started = startServicesIfReady()
-                        if (started) {
-                            persistAppActive(true)
-                            updateAppStatusUI(true)
-                        } else {
-                            // Algo ainda falta → volta a OFF e não persiste
-                            binding.appStatusSwitch.isChecked = false
-                            persistAppActive(false)
-                            updateAppStatusUI(false)
+                        if (binding.appStatusSwitch.isChecked) {
+                            val started = startServicesIfReady()
+                            if (started) {
+                                persistAppActive(true)
+                                updateAppStatusUI(true)
+                            } else {
+                                binding.appStatusSwitch.isChecked = false
+                                persistAppActive(false)
+                                updateAppStatusUI(false)
+                            }
                         }
+                    } else {
+                        Log.w(TAG, "[$currentFlowId] Permissão de captura NEGADA")
+                        MediaProjectionData.clear()
+                        Toast.makeText(this, "Permissão de captura é necessária.", Toast.LENGTH_LONG).show()
+                        binding.appStatusSwitch.isChecked = false
+                        persistAppActive(false)
+                        updateAppStatusUI(false)
                     }
-                } else {
-                    Log.w(TAG, "Permissão de captura NEGADA")
-                    MediaProjectionData.clear()
-                    Toast.makeText(this, "Permissão de captura é necessária.", Toast.LENGTH_LONG).show()
-                    // Garante OFF e não persiste ON
-                    binding.appStatusSwitch.isChecked = false
-                    persistAppActive(false)
-                    updateAppStatusUI(false)
+                    updatePermissionStatusUI()
+                } finally {
+                    // Fecha o fluxo e abre cooldown
+                    isRequestingProjection = false
+                    lastProjectionLaunchAt = SystemClock.elapsedRealtime()
+                    Log.d(TAG, "[$currentFlowId] Fluxo fechado; cooldown iniciado.")
                 }
-                updatePermissionStatusUI()
             }
 
         // Notificações (Android 13+)
@@ -273,7 +285,6 @@ class MainActivity : AppCompatActivity() {
 
         when {
             savedActive && allOk -> {
-                // Auto-start silencioso (evita teres de desligar/ligar)
                 binding.appStatusSwitch.isChecked = true
                 val started = startServicesIfReady()
                 if (!started) {
@@ -284,12 +295,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             savedActive && !allOk -> {
-                // Estava guardado ON mas não há permissões → força OFF
                 binding.appStatusSwitch.isChecked = false
                 persistAppActive(false)
             }
             else -> {
-                // Mantém OFF por omissão
                 binding.appStatusSwitch.isChecked = false
                 persistAppActive(false)
             }
@@ -301,6 +310,13 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Permissões ----------
     private fun checkPermissionsAndStartOrRequestCapture() {
+        // travão: fluxo em curso ou cooldown
+        val now = SystemClock.elapsedRealtime()
+        if (isRequestingProjection || (now - lastProjectionLaunchAt) < PROJECTION_LAUNCH_COOLDOWN_MS) {
+            Log.w(TAG, "[$currentFlowId] checkPermissions abortado (em curso/cooldown).")
+            return
+        }
+
         Log.d(TAG, "Verificar permissões para iniciar")
         val isAccessibilityEnabled = isAccessibilityServiceEnabled()
         val canDrawOverlays = Settings.canDrawOverlays(this)
@@ -339,11 +355,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestScreenCapturePermission() {
+        val now = SystemClock.elapsedRealtime()
+        if (isRequestingProjection || (now - lastProjectionLaunchAt) < PROJECTION_LAUNCH_COOLDOWN_MS) {
+            Log.w(TAG, "[$currentFlowId] requestScreenCapturePermission abortado (em curso/cooldown).")
+            return
+        }
         try {
+            isRequestingProjection = true
+            currentFlowId = System.currentTimeMillis()
+            lastProjectionLaunchAt = now
+            Log.i(TAG, "[$currentFlowId] Lançar consentimento MediaProjection")
             MediaProjectionData.clear()
             mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao pedir captura: ${e.message}")
+            Log.e(TAG, "[$currentFlowId] Erro ao pedir captura: ${e.message}")
+            isRequestingProjection = false
             Toast.makeText(this, "Não foi possível solicitar permissão de captura.", Toast.LENGTH_SHORT).show()
             binding.appStatusSwitch.isChecked = false
             persistAppActive(false)
@@ -394,8 +420,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Serviços ----------
     /**
-     * Tenta iniciar os serviços necessários. Só deve ser chamado quando as permissões estão OK.
-     * @return true se ambos (overlay e captura) ficaram a correr; false caso contrário.
+     * Arranca captura PRIMEIRO; overlay depois (só se captura ficou ativa).
      */
     private fun startServicesIfReady(): Boolean {
         Log.d(TAG, "startServicesIfReady")
@@ -403,8 +428,8 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "startServicesIfReady chamado sem permissões completas.")
             return false
         }
-        val overlayOk = startOverlayService()
         val captureOk = startScreenCaptureService()
+        val overlayOk = if (captureOk) startOverlayService() else false
         return overlayOk && captureOk
     }
 

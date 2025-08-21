@@ -2,7 +2,7 @@ package com.example.smartdriver.utils
 
 import android.content.Context
 import android.util.Log
-import com.example.smartdriver.SettingsActivity // Precisa importar SettingsActivity para ler os limiares
+import com.example.smartdriver.SettingsActivity
 
 /**
  * Avaliador que analisa uma oferta e determina sua qualidade com base
@@ -24,45 +24,54 @@ class OfferEvaluator(private val context: Context) {
      * @return Um objeto EvaluationResult contendo as classificações.
      */
     fun evaluateOffer(offer: OfferData): EvaluationResult {
-        Log.d(TAG, "Avaliando oferta: ${offer.value}€, Dist=${offer.calculateTotalDistance()}km, Tempo=${offer.calculateTotalTimeMinutes()}min")
+        Log.d(
+            TAG,
+            "Avaliando oferta: ${offer.value}€, Dist=${offer.calculateTotalDistance()}km, Tempo=${offer.calculateTotalTimeMinutes()}min"
+        )
 
-        // 1. Obter os limiares salvos das configurações
+        // 1) Limiar configurável
         val goodKmThreshold = SettingsActivity.getGoodKmThreshold(context)
         val poorKmThreshold = SettingsActivity.getPoorKmThreshold(context)
         val goodHourThreshold = SettingsActivity.getGoodHourThreshold(context)
         val poorHourThreshold = SettingsActivity.getPoorHourThreshold(context)
 
-        Log.d(TAG, "Limiares lidos: Km(Bom≥$goodKmThreshold, Mau≤$poorKmThreshold), Hora(Bom≥$goodHourThreshold, Mau≤$poorHourThreshold)")
+        Log.d(
+            TAG,
+            "Limiares: Km(Bom≥$goodKmThreshold, Mau≤$poorKmThreshold), Hora(Bom≥$goodHourThreshold, Mau≤$poorHourThreshold)"
+        )
 
-        // 2. Calcular valor por km e por hora da oferta atual (podem retornar null)
+        // 2) Métricas da oferta
         val valuePerKm = offer.calculateProfitability()
         val valuePerHour = offer.calculateValuePerHour()
+        Log.d(TAG, "Valores: €/km=$valuePerKm, €/hora=$valuePerHour")
 
-        Log.d(TAG, "Valores calculados: €/km = $valuePerKm, €/hora = $valuePerHour")
-
-        // 3. Avaliar €/km individualmente (Tratando null como UNKNOWN)
+        // 3) Rating €/km
         val kmRating = when {
-            valuePerKm == null -> IndividualRating.UNKNOWN // <<<<<<< TRATAMENTO DE NULL
+            valuePerKm == null -> IndividualRating.UNKNOWN
             valuePerKm >= goodKmThreshold -> IndividualRating.GOOD
             valuePerKm <= poorKmThreshold -> IndividualRating.POOR
-            else -> IndividualRating.MEDIUM // Entre Mau e Bom
+            else -> IndividualRating.MEDIUM
         }
         Log.d(TAG, "Classificação €/km: $kmRating")
 
-        // 4. Avaliar €/hora individualmente (Tratando null como UNKNOWN)
+        // 4) Rating €/hora (dinâmica já refletida via thresholds)
         val hourRating = when {
-            valuePerHour == null -> IndividualRating.UNKNOWN // <<<<<<< TRATAMENTO DE NULL
+            valuePerHour == null -> IndividualRating.UNKNOWN
             valuePerHour >= goodHourThreshold -> IndividualRating.GOOD
             valuePerHour <= poorHourThreshold -> IndividualRating.POOR
-            else -> IndividualRating.MEDIUM // Entre Mau e Bom
+            else -> IndividualRating.MEDIUM
         }
         Log.d(TAG, "Classificação €/hora: $hourRating")
 
-        // 5. Determinar a cor da borda combinada
-        val borderRating = determineBorderRating(kmRating, hourRating)
-        Log.i(TAG, "Classificação Final: Borda=$borderRating (Km=$kmRating, Hora=$hourRating)")
+        // 5) Combinação para o halo
+        //    IMPORTANTE: UNKNOWN -> MEDIUM, para manter dinâmica (verde/vermelho) e evitar GRAY.
+        val kmForHalo = kmRating.toCombining()
+        val hrForHalo = hourRating.toCombining()
+        val borderRating = determineBorderRating(kmForHalo, hrForHalo)
 
-        // 6. Retornar o resultado completo
+        Log.i(TAG, "Final: Halo=$borderRating (Km=$kmRating⇒$kmForHalo, Hora=$hourRating⇒$hrForHalo)")
+
+        // 6) Resultado
         return EvaluationResult(
             kmRating = kmRating,
             hourRating = hourRating,
@@ -71,12 +80,19 @@ class OfferEvaluator(private val context: Context) {
     }
 
     /**
-     * Determina a cor da borda com base nas classificações individuais.
-     * (Lógica inalterada, já tratava UNKNOWN para dar GRAY)
+     * UNKNOWN é tratado como MEDIUM para efeitos de halo.
+     */
+    private fun IndividualRating.toCombining(): IndividualRating =
+        if (this == IndividualRating.UNKNOWN) IndividualRating.MEDIUM else this
+
+    /**
+     * Regra do halo:
+     * - Verde  se Km=GOOD e Hora=GOOD
+     * - Vermelho se Km=POOR e Hora=POOR
+     * - Amarelo nos restantes casos (inclui mixes e UNKNOWN tratado como MEDIUM)
      */
     private fun determineBorderRating(km: IndividualRating, hour: IndividualRating): BorderRating {
         return when {
-            km == IndividualRating.UNKNOWN || hour == IndividualRating.UNKNOWN -> BorderRating.GRAY
             km == IndividualRating.GOOD && hour == IndividualRating.GOOD -> BorderRating.GREEN
             km == IndividualRating.POOR && hour == IndividualRating.POOR -> BorderRating.RED
             else -> BorderRating.YELLOW

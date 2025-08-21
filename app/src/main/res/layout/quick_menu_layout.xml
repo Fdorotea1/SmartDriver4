@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
+    android:minWidth="360dp"
     android:orientation="vertical"
     android:background="?android:attr/colorBackground"
     android:padding="12dp"
@@ -53,6 +54,183 @@
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp"/>
 
+    <!-- ============== HUD DONUTS + SLIDER DA META ============== -->
+    <!-- Chip de estado do turno -->
+    <TextView
+        android:id="@+id/textShiftStateChip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Em pausa"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:textColor="@android:color/white"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:layout_marginBottom="6dp"
+        android:background="#803A3A3A"
+        android:visibility="gone"
+        android:layout_gravity="center_horizontal"/>
+
+    <LinearLayout
+        android:id="@+id/hudDonuts"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingTop="4dp"
+        android:paddingBottom="8dp">
+
+        <!-- Linha 1: Tempo & Meta (€) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:measureWithLargestChild="true">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.example.smartdriver.ui.widgets.DonutProgressView
+                    android:id="@+id/donutTime"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    tools:ignore="MissingPrefix"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Tempo"
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.example.smartdriver.ui.widgets.DonutProgressView
+                    android:id="@+id/donutGoal"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    tools:ignore="MissingPrefix"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Meta"
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Slider da Meta (ajusta € alvo) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:layout_marginTop="6dp">
+
+            <TextView
+                android:id="@+id/textGoalLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/shift_target_label"
+                android:textSize="12sp"
+                android:textColor="?android:attr/textColorSecondary"/>
+
+            <TextView
+                android:id="@+id/textGoalValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="130,00 €"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:textColor="?android:attr/textColorPrimary"
+                tools:text="130,00 €"/>
+
+            <SeekBar
+                android:id="@+id/seekBarGoal"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="500"
+                android:progress="130"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="4dp"/>
+        </LinearLayout>
+
+        <!-- Linha 2: Média €/h & Fim Previsto -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginTop="8dp"
+            android:measureWithLargestChild="true">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.example.smartdriver.ui.widgets.DonutProgressView
+                    android:id="@+id/donutAverage"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    tools:ignore="MissingPrefix"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Média"
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <com.example.smartdriver.ui.widgets.DonutProgressView
+                    android:id="@+id/donutEta"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    tools:ignore="MissingPrefix"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Fim"
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+    <!-- ============== /HUD DONUTS ============== -->
+
+    <!-- Blocos antigos (mantidos p/ IDs que o código usa, mas ocultos) -->
     <TextView
         android:id="@+id/textViewShiftStatus"
         android:layout_width="match_parent"
@@ -63,14 +241,16 @@
         android:layout_marginBottom="4dp"
         android:textColor="?android:attr/textColorSecondary"
         tools:text="Turno Pausado"
-        android:text="@string/shift_status_none"/>
+        android:text="@string/shift_status_none"
+        android:visibility="gone"/>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="4dp">
+        android:layout_marginBottom="4dp"
+        android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
@@ -97,7 +277,8 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="4dp">
+        android:layout_marginBottom="4dp"
+        android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
@@ -119,13 +300,13 @@
             android:text="--:--:--"/>
     </LinearLayout>
 
-    <!-- BLOCO DA MÉDIA/HORA -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="4dp">
+        android:layout_marginBottom="4dp"
+        android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
@@ -147,13 +328,13 @@
             android:text="-- €/h"/>
     </LinearLayout>
 
-    <!-- BLOCO DA META DIÁRIA -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="4dp">
+        android:layout_marginBottom="4dp"
+        android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
@@ -175,13 +356,13 @@
             tools:text="100,00 €"/>
     </LinearLayout>
 
-    <!-- BLOCO DO FIM PREVISTO -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="8dp">
+        android:layout_marginBottom="8dp"
+        android:visibility="gone">
 
         <TextView
             android:layout_width="wrap_content"
@@ -203,6 +384,7 @@
             tools:text="17:24"/>
     </LinearLayout>
 
+    <!-- Botões -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -251,5 +433,4 @@
         android:drawablePadding="12dp"
         android:background="?android:attr/selectableItemBackground"
         android:drawableStart="@android:drawable/ic_menu_close_clear_cancel"/>
-
 </LinearLayout>

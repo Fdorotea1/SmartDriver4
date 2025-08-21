@@ -1,21 +1,25 @@
 package com.example.smartdriver
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
-import androidx.appcompat.app.AlertDialog // <<< Import para AlertDialog
+import android.widget.EditText
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.example.smartdriver.databinding.ActivityHistoryBinding
 import com.example.smartdriver.overlay.OverlayService
 import com.example.smartdriver.utils.TripHistoryEntry
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.google.gson.reflect.TypeToken
+import java.text.NumberFormat
+import java.util.Locale
 
 class HistoryActivity : AppCompatActivity() {
 
@@ -23,12 +27,16 @@ class HistoryActivity : AppCompatActivity() {
     private lateinit var historyPrefs: SharedPreferences
     private val gson = Gson()
     private lateinit var historyAdapter: HistoryAdapter
-    // A lista do adapter precisa ser mutável para remover itens
     private var historyList: MutableList<TripHistoryEntry> = mutableListOf()
 
     companion object {
         private const val TAG = "HistoryActivity"
     }
+
+    private val currencyPT: NumberFormat =
+        NumberFormat.getCurrencyInstance(Locale("pt", "PT")).apply {
+            minimumFractionDigits = 2; maximumFractionDigits = 2
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,11 +49,10 @@ class HistoryActivity : AppCompatActivity() {
         historyPrefs = getSharedPreferences(OverlayService.HISTORY_PREFS_NAME, Context.MODE_PRIVATE)
 
         setupRecyclerView()
-        loadHistoryData() // Carrega os dados iniciais
+        loadHistoryData()
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        // ... (código inalterado) ...
         return when (item.itemId) {
             android.R.id.home -> { onBackPressedDispatcher.onBackPressed(); true }
             else -> super.onOptionsItemSelected(item)
@@ -53,48 +60,133 @@ class HistoryActivity : AppCompatActivity() {
     }
 
     private fun setupRecyclerView() {
-        // Passa a lista mutável para o adapter
-        historyAdapter = HistoryAdapter(historyList) { entry, position ->
-            // Define o que acontece no clique longo (chama o diálogo de exclusão)
-            showDeleteConfirmationDialog(entry, position)
-        }
-        // Define o listener no adapter
-        // historyAdapter.setOnItemLongClickListener { entry, position ->
-        //     showDeleteConfirmationDialog(entry, position)
-        // }
-
+        historyAdapter = HistoryAdapter(
+            historyList,
+            onItemClick = { entry, position -> showEditDialog(entry, position) },
+            onItemLongClick = { entry, position -> showDeleteConfirmationDialog(entry, position) }
+        )
         binding.recyclerViewHistory.apply {
             layoutManager = LinearLayoutManager(this@HistoryActivity)
             adapter = historyAdapter
         }
-        Log.d(TAG, "RecyclerView configurado com listener de clique longo.")
+        Log.d(TAG, "RecyclerView configurado (click=editar, longClick=apagar).")
     }
 
-    // --- Função para mostrar o diálogo de confirmação ---
+    // ---------------- Editar valor efetivo ----------------
+
+    private fun showEditDialog(entry: TripHistoryEntry, position: Int) {
+        val currentEff = getEffectiveValue(entry)
+        val edit = EditText(this).apply {
+            hint = "Valor efetivo (€)"
+            setText(if (currentEff > 0) String.format(Locale.US, "%.2f", currentEff) else "")
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Editar valor efetivo")
+            .setView(edit)
+            .setPositiveButton("Guardar") { dialog, _ ->
+                val txt = edit.text?.toString()?.replace(",", ".")?.trim()
+                val newEff = txt?.toDoubleOrNull()
+                if (newEff == null || newEff <= 0.0) {
+                    Toast.makeText(this, "Valor inválido", Toast.LENGTH_SHORT).show()
+                } else {
+                    applyEditToHistory(entry, position, newEff)
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun applyEditToHistory(entryToEdit: TripHistoryEntry, position: Int, newEffective: Double) {
+        try {
+            val currentHistoryJson = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
+            val listType = object : TypeToken<MutableList<String>>() {}.type
+            val jsonList: MutableList<String> = gson.fromJson(currentHistoryJson, listType) ?: mutableListOf()
+
+            var indexToUpdate = -1
+            var oldEntryObj: TripHistoryEntry? = null
+            for (i in jsonList.indices) {
+                try {
+                    val e = gson.fromJson(jsonList[i], TripHistoryEntry::class.java)
+                    if (e != null && e.startTimeMillis == entryToEdit.startTimeMillis) {
+                        indexToUpdate = i
+                        oldEntryObj = e
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Erro ao deserializar item durante busca para edição: ${jsonList[i]}", e)
+                }
+            }
+            if (indexToUpdate == -1 || oldEntryObj == null) {
+                Log.e(TAG, "Não foi possível localizar a entrada no armazenamento para editar.")
+                Toast.makeText(this, "Falha ao editar (não encontrado).", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val oldEff = getEffectiveValue(oldEntryObj)
+            val updated = oldEntryObj.copy(effectiveValue = newEffective)
+
+            jsonList[indexToUpdate] = gson.toJson(updated)
+            historyPrefs.edit().putString(OverlayService.KEY_TRIP_HISTORY, gson.toJson(jsonList)).apply()
+
+            if (position < historyList.size && historyList[position].startTimeMillis == entryToEdit.startTimeMillis) {
+                historyList[position] = updated
+                historyAdapter.notifyItemChanged(position)
+            } else {
+                loadHistoryData()
+            }
+
+            val delta = newEffective - oldEff
+            if (delta != 0.0) {
+                val intent = Intent(this, com.example.smartdriver.overlay.OverlayService::class.java).apply {
+                    action = OverlayService.ACTION_APPLY_SHIFT_DELTA
+                    putExtra(OverlayService.EXTRA_TRIP_START_MS, updated.startTimeMillis)
+                    putExtra(OverlayService.EXTRA_OLD_EFFECTIVE, oldEff)
+                    putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, newEffective)
+                }
+                try { startService(intent) } catch (_: Exception) {}
+            }
+
+            Toast.makeText(
+                this,
+                "Atualizado para ${currencyPT.format(newEffective)} (Δ ${currencyPT.format(delta)})",
+                Toast.LENGTH_LONG
+            ).show()
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao editar entrada: ${e.message}", e)
+            Toast.makeText(this, "Erro ao editar.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun getEffectiveValue(e: TripHistoryEntry): Double {
+        return (e.effectiveValue ?: e.offerValue ?: 0.0).coerceAtLeast(0.0)
+    }
+
+    // ---------------- Apagar entrada ----------------
+
     private fun showDeleteConfirmationDialog(entryToDelete: TripHistoryEntry, position: Int) {
         AlertDialog.Builder(this)
             .setTitle("Excluir Entrada?")
             .setMessage("Tem a certeza que deseja excluir esta entrada do histórico?")
-            .setIcon(android.R.drawable.ic_dialog_alert) // Ícone de alerta padrão
-            .setPositiveButton("Excluir") { dialog, which ->
-                // Ação se confirmar a exclusão
+            .setIcon(android.R.drawable.ic_dialog_alert)
+            .setPositiveButton("Excluir") { dialog, _ ->
                 deleteHistoryEntry(entryToDelete, position)
+                dialog.dismiss()
             }
-            .setNegativeButton("Cancelar", null) // Nenhuma ação se cancelar
+            .setNegativeButton("Cancelar", null)
             .show()
     }
-    // ----------------------------------------------------
 
-    // --- Função para excluir a entrada ---
     private fun deleteHistoryEntry(entryToDelete: TripHistoryEntry, position: Int) {
-        Log.d(TAG, "Tentando excluir entrada na posição $position com startTime: ${entryToDelete.startTimeMillis}")
+        Log.d(TAG, "Excluir entrada na posição $position com startTime: ${entryToDelete.startTimeMillis}")
         try {
-            // 1. Lê a lista atual de JSON strings
             val currentHistoryJson = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
             val listType = object : TypeToken<MutableList<String>>() {}.type
             val mutableJsonList: MutableList<String> = gson.fromJson(currentHistoryJson, listType) ?: mutableListOf()
 
-            // 2. Encontra o índice do JSON a ser removido (comparando startTimeMillis)
             var indexToRemove = -1
             for (i in mutableJsonList.indices) {
                 try {
@@ -105,58 +197,49 @@ class HistoryActivity : AppCompatActivity() {
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Erro ao deserializar item durante busca para exclusão: ${mutableJsonList[i]}", e)
-                    // Continua procurando, pode ser uma entrada inválida antiga
                 }
             }
 
-            // 3. Remove o JSON da lista se encontrado
             if (indexToRemove != -1) {
+                val oldEff = getEffectiveValue(entryToDelete)
+                val intent = Intent(this, com.example.smartdriver.overlay.OverlayService::class.java).apply {
+                    action = OverlayService.ACTION_APPLY_SHIFT_DELTA
+                    putExtra(OverlayService.EXTRA_TRIP_START_MS, entryToDelete.startTimeMillis)
+                    putExtra(OverlayService.EXTRA_OLD_EFFECTIVE, oldEff)
+                    putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, 0.0)
+                }
+                try { startService(intent) } catch (_: Exception) {}
+
                 mutableJsonList.removeAt(indexToRemove)
-                Log.d(TAG, "Entrada JSON encontrada e removida no índice $indexToRemove.")
+                historyPrefs.edit().putString(OverlayService.KEY_TRIP_HISTORY, gson.toJson(mutableJsonList)).apply()
 
-                // 4. Salva a lista JSON atualizada de volta nas SharedPreferences
-                val updatedHistoryJson = gson.toJson(mutableJsonList)
-                historyPrefs.edit().putString(OverlayService.KEY_TRIP_HISTORY, updatedHistoryJson).apply()
-                Log.i(TAG, "Histórico atualizado nas SharedPreferences após exclusão.")
-
-                // 5. Remove o item da lista local do adapter
                 if (position < historyList.size && historyList[position].startTimeMillis == entryToDelete.startTimeMillis) {
                     historyList.removeAt(position)
-                    // 6. Notifica o adapter sobre a remoção (com animação)
                     historyAdapter.notifyItemRemoved(position)
-                    // Opcional: Notificar mudança no range para atualizar posições subsequentes
                     historyAdapter.notifyItemRangeChanged(position, historyList.size)
-                    Log.i(TAG, "Item removido do adapter na posição $position.")
-                    // Verifica se a lista ficou vazia
-                    if (historyList.isEmpty()) {
-                        showEmptyState(true, "Histórico vazio.")
-                    }
+                    if (historyList.isEmpty()) showEmptyState(true, "Histórico vazio.")
                 } else {
-                    // Se a posição não corresponder (raro, mas pode acontecer), recarrega tudo
-                    Log.w(TAG, "Inconsistência de posição ($position) ao remover do adapter. Recarregando lista.")
                     loadHistoryData()
                 }
-
             } else {
-                Log.e(TAG, "ERRO: Não foi possível encontrar a entrada JSON correspondente para exclusão nas SharedPreferences.")
-                // Talvez recarregar a lista para garantir consistência
+                Log.e(TAG, "Não foi possível encontrar a entrada para exclusão.")
                 loadHistoryData()
             }
-
         } catch (e: Exception) {
-            Log.e(TAG, "Erro GERAL ao excluir entrada do histórico: ${e.message}", e)
-            // Recarrega a lista em caso de erro para tentar sincronizar
+            Log.e(TAG, "Erro ao excluir entrada do histórico: ${e.message}", e)
             loadHistoryData()
         }
     }
-    // -----------------------------------
 
-    // loadHistoryData e showEmptyState permanecem iguais às versões anteriores que corrigimos
+    // ---------------- Carregar lista ----------------
+
     private fun loadHistoryData() {
         Log.d(TAG, "Carregando histórico...")
         val historyJsonStringList = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
         if (historyJsonStringList.isNullOrEmpty() || historyJsonStringList == "[]") {
-            Log.d(TAG, "Histórico vazio."); showEmptyState(true, "Nenhum histórico encontrado."); return
+            Log.d(TAG, "Histórico vazio.")
+            showEmptyState(true, "Nenhum histórico encontrado.")
+            return
         }
         try {
             val listType = object : TypeToken<MutableList<String>>() {}.type
@@ -166,17 +249,22 @@ class HistoryActivity : AppCompatActivity() {
                 catch (e: JsonSyntaxException) { Log.e(TAG, "Erro sintaxe JSON entrada: $jsonEntryString", e); null }
                 catch (e: Exception) { Log.e(TAG, "Erro inesperado deserializar entrada: $jsonEntryString", e); null }
             }
-            if (loadedEntries.isEmpty()) { showEmptyState(true, "Nenhum histórico válido.") }
-            else {
+            if (loadedEntries.isEmpty()) {
+                showEmptyState(true, "Nenhum histórico válido.")
+            } else {
                 historyList.clear()
                 historyList.addAll(loadedEntries.sortedByDescending { it.startTimeMillis })
-                // historyAdapter.updateData(historyList) // Ou apenas notificar
-                historyAdapter.notifyDataSetChanged() // Notifica o adapter após carregar/ordenar
+                historyAdapter.notifyDataSetChanged()
                 showEmptyState(false)
                 Log.i(TAG, "Histórico carregado: ${historyList.size} itens.")
             }
-        } catch (e: JsonSyntaxException) { Log.e(TAG, "Erro sintaxe JSON lista principal: $historyJsonStringList", e); showEmptyState(true, "Erro ao ler dados.") }
-        catch (e: Exception) { Log.e(TAG, "Erro GERAL ao carregar histórico: $historyJsonStringList", e); showEmptyState(true, "Erro inesperado.") }
+        } catch (e: JsonSyntaxException) {
+            Log.e(TAG, "Erro sintaxe JSON lista principal: $historyJsonStringList", e)
+            showEmptyState(true, "Erro ao ler dados.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro GERAL ao carregar histórico: $historyJsonStringList", e)
+            showEmptyState(true, "Erro inesperado.")
+        }
     }
 
     private fun showEmptyState(show: Boolean, message: String? = null) {

@@ -1,4 +1,4 @@
-package com.example.smartdriver.utils // <<< VERIFIQUE O PACKAGE
+package com.example.smartdriver.utils
 
 import android.graphics.Bitmap
 import android.graphics.Rect
@@ -76,6 +76,42 @@ class ImageAnalysisUtils {
             "uberx", "comfort", "black", "green", "xl", "pet", "wav", "assist", "pool",
             "flash", "taxi", "business comfort", "ubergreen", "green teens", "exclusivo"
         )
+
+        // ---------- Detector dedicado: "A recolher" ----------
+        /**
+         * Deteta a frase-chave "A recolher" (sem os "...").
+         * NOTA: não usa applyOcrCorrections para não converter 'l'→'1'.
+         */
+        fun detectPickupState(visionText: Text): Boolean {
+            val raw = visionText.text ?: return false
+            if (raw.isBlank()) return false
+
+            // Limpa espaços e normaliza acentos/minúsculas
+            val pretty = normalizeSpaces(raw)
+            val normalized = stripAccentsLower(pretty)
+
+            // Casa "a recolher" permitindo espaços/linhas entre as palavras
+            val pickupRegex = Regex("\\ba\\s+recolher\\b")
+
+            // 1) Tentativa direta
+            if (pickupRegex.containsMatchIn(normalized)) {
+                Log.i(TAG, "⚡ Detetado 'A recolher' (normal).")
+                return true
+            }
+
+            // 2) Tentativa tolerante a erros comuns do OCR (1↔l, 0↔o)
+            val tolerant = normalized
+                .replace('1', 'l')
+                .replace('0', 'o')
+
+            val foundT = pickupRegex.containsMatchIn(tolerant)
+            if (foundT) {
+                Log.i(TAG, "⚡ Detetado 'A recolher' (tolerante 1→l / 0→o).")
+            } else {
+                Log.v(TAG, "Pickup não encontrado. Amostra: ${normalized.take(120)}")
+            }
+            return foundT
+        }
     }
 
     private data class MatchedTimeDist(

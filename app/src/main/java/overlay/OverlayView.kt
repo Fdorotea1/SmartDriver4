@@ -1,4 +1,4 @@
-package com.example.smartdriver.overlay // CONFIRMAR O PACKAGE
+package com.example.smartdriver.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -10,14 +10,14 @@ import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
-import com.example.smartdriver.utils.OfferData
+import com.example.smartdriver.utils.BorderRating
 import com.example.smartdriver.utils.EvaluationResult
 import com.example.smartdriver.utils.IndividualRating
-import com.example.smartdriver.utils.BorderRating
+import com.example.smartdriver.utils.OfferData
 import java.math.RoundingMode
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
-import java.util.*
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -27,20 +27,20 @@ class OverlayView(context: Context) : View(context) {
     companion object {
         private const val TAG = "OverlayView"
 
-        // Cores base
+        // Cores
         private val BORDER_COLOR_GREEN = Color.parseColor("#2E7D32")
         private val BORDER_COLOR_YELLOW = Color.parseColor("#F9A825")
-        private val BORDER_COLOR_RED = Color.parseColor("#C62828")
-        private val BORDER_COLOR_GRAY = Color.parseColor("#9E9E9E")
+        private val BORDER_COLOR_RED   = Color.parseColor("#C62828")
+        private val BORDER_COLOR_GRAY  = Color.parseColor("#9E9E9E")
 
-        private val INDICATOR_COLOR_GOOD = BORDER_COLOR_GREEN
-        private val INDICATOR_COLOR_MEDIUM = BORDER_COLOR_YELLOW
-        private val INDICATOR_COLOR_POOR = BORDER_COLOR_RED
+        private val INDICATOR_COLOR_GOOD    = BORDER_COLOR_GREEN
+        private val INDICATOR_COLOR_MEDIUM  = BORDER_COLOR_YELLOW
+        private val INDICATOR_COLOR_POOR    = BORDER_COLOR_RED
         private val INDICATOR_COLOR_UNKNOWN = Color.DKGRAY
 
-        private val BACKGROUND_COLOR = Color.WHITE
-        private val TEXT_COLOR_LABEL = Color.DKGRAY
-        private val TEXT_COLOR_VALUE = Color.BLACK
+        private val BACKGROUND_COLOR      = Color.WHITE
+        private val TEXT_COLOR_LABEL      = Color.DKGRAY
+        private val TEXT_COLOR_VALUE      = Color.BLACK
         private val PLACEHOLDER_TEXT_COLOR = Color.LTGRAY
 
         // Dimensões (DP/SP)
@@ -53,7 +53,7 @@ class OverlayView(context: Context) : View(context) {
         private const val INDICATOR_BAR_WIDTH_DP = 4f
         private const val INDICATOR_BAR_MARGIN_DP = 6f
 
-        // Tamanhos de letra
+        // Tamanhos texto
         private const val LABEL_TEXT_SIZE_SP = 11f
         private const val VALUE_TEXT_SIZE_SP = 13f
         private const val HIGHLIGHT_VALUE_TEXT_SIZE_SP = 14f
@@ -98,7 +98,7 @@ class OverlayView(context: Context) : View(context) {
     private val bannerBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val bannerTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.DEFAULT_BOLD }
 
-    // Dimensões
+    // Dimensões calculadas
     private var paddingPx = 0f
     private var borderRadiusPx = 0f
     private var textSpacingVerticalPx = 0f
@@ -134,11 +134,9 @@ class OverlayView(context: Context) : View(context) {
         updateDimensionsAndPaints()
 
         gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-
             override fun onDown(e: MotionEvent): Boolean = true
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                // Dispensar apenas o overlay principal (mantém menu, etc.)
                 val dismissIntent = Intent(context, OverlayService::class.java).apply {
                     action = OverlayService.ACTION_DISMISS_MAIN_OVERLAY_ONLY
                 }
@@ -149,20 +147,13 @@ class OverlayView(context: Context) : View(context) {
             }
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                // Mantemos simples: não consumir o toque
+                // Não consumimos — deixa o serviço gerir o fade, etc.
                 return false
             }
 
-            override fun onFling(
-                e1: MotionEvent,
-                e2: MotionEvent,
-                velocityX: Float,
-                velocityY: Float
-            ): Boolean {
+            override fun onFling(e1: MotionEvent, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
                 val diffY = e2.y - e1.y
                 val diffX = e2.x - e1.x
-
-                // Swipe horizontal para DIREITA inicia tracking
                 if (abs(diffX) > abs(diffY)) {
                     if (abs(diffX) > swipeMinDistancePx && abs(velocityX) > swipeThresholdVelocityPx) {
                         if (diffX > 0) {
@@ -181,7 +172,6 @@ class OverlayView(context: Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val consumed = gestureDetector.onTouchEvent(event)
-        // Auto-limpeza do banner temporizado
         if (bannerText != null && bannerClearAt > 0 && System.currentTimeMillis() >= bannerClearAt) {
             bannerText = null
             bannerClearAt = 0
@@ -268,9 +258,7 @@ class OverlayView(context: Context) : View(context) {
         val firstRowHeight = labelHeight + textSpacingVerticalPx + topHighlightHeight
         val secondRowHeight = labelHeight + textSpacing_vertical_for_bottom() + valueHeight
 
-        // Reservar espaço vertical extra se houver banner
         val bannerExtra = if (bannerText != null) (bannerPadVPx * 2 + bannerTextPaint.textSize) + textSpacingVerticalPx else 0f
-
         val requiredHeight = (paddingPx * 2) + firstRowHeight + lineSpacingVerticalPx + secondRowHeight + bannerExtra
 
         val measuredWidth = resolveSize(requiredWidth.toInt(), widthMeasureSpec)
@@ -290,10 +278,22 @@ class OverlayView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        // 1) Obter ratings individuais
+        val kmRating   = currentEvaluationResult?.kmRating   ?: IndividualRating.UNKNOWN
+        val hourRating = currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN
+
+        // 2) Calcular cor combinada localmente (regra canónica)
+        val providedCombined = currentEvaluationResult?.combinedBorderRating ?: BorderRating.GRAY
+        val recomputed = recomputeCombinedBorder(kmRating, hourRating)
+        val finalBorder = if (providedCombined == recomputed) providedCombined else {
+            Log.w(TAG, "Combined mismatch: provided=$providedCombined, recomputed=$recomputed. Using recomputed.")
+            recomputed
+        }
+
         // Fundo + moldura
         backgroundPaint.alpha = (viewAlpha * 255).toInt()
         borderPaint.alpha = (viewAlpha * 255).toInt()
-        borderPaint.color = getBorderColor(currentEvaluationResult?.combinedBorderRating ?: BorderRating.GRAY)
+        borderPaint.color = getBorderColor(finalBorder)
         canvas.drawRoundRect(backgroundRect, borderRadiusPx, borderRadiusPx, backgroundPaint)
         canvas.drawRoundRect(borderRect, borderRadiusPx, borderRadiusPx, borderPaint)
 
@@ -316,12 +316,11 @@ class OverlayView(context: Context) : View(context) {
         val bottom = top + bannerTextPaint.textSize + (bannerPadVPx * 2)
         bannerRect.set(left, top, right, bottom)
 
-        when (bannerType) {
-            BannerType.INFO -> bannerBgPaint.color = Color.parseColor("#1976D2")
-            BannerType.SUCCESS -> bannerBgPaint.color = Color.parseColor("#2E7D32")
-            BannerType.WARNING -> bannerBgPaint.color = Color.parseColor("#E65100")
+        bannerBgPaint.color = when (bannerType) {
+            BannerType.INFO -> Color.parseColor("#1976D2")
+            BannerType.SUCCESS -> Color.parseColor("#2E7D32")
+            BannerType.WARNING -> Color.parseColor("#E65100")
         }
-
         bannerBgPaint.alpha = (viewAlpha * 255).toInt()
         canvas.drawRoundRect(bannerRect, bannerCornerPx, bannerCornerPx, bannerBgPaint)
 
@@ -333,9 +332,9 @@ class OverlayView(context: Context) : View(context) {
 
     private fun drawOfferDetailsWithIndicators(canvas: Canvas) {
         val profitability = currentOfferData?.calculateProfitability()
-        val valuePerHour = currentOfferData?.calculateValuePerHour()
+        val valuePerHour  = currentOfferData?.calculateValuePerHour()
 
-        val euroPerKmStr = profitability?.let { String.format(Locale.US, "%.2f", it) } ?: PLACEHOLDER_TEXT
+        val euroPerKmStr   = profitability?.let { String.format(Locale.US, "%.2f", it) } ?: PLACEHOLDER_TEXT
         val euroPerHourStr = valuePerHour?.let { "${euroHoraFormatter.format(it)} €" } ?: PLACEHOLDER_TEXT
 
         val totalKmStr = currentOfferData?.calculateTotalDistance()?.takeIf { it > 0 }
@@ -344,24 +343,22 @@ class OverlayView(context: Context) : View(context) {
             ?.let { "$it m" } ?: PLACEHOLDER_TEXT
         val mainValueStr = currentOfferData?.value?.takeIf { it.isNotEmpty() }?.let { "$it €" } ?: PLACEHOLDER_TEXT
 
-        val kmRating = currentEvaluationResult?.kmRating ?: IndividualRating.UNKNOWN
+        val kmRating   = currentEvaluationResult?.kmRating   ?: IndividualRating.UNKNOWN
         val hourRating = currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN
 
-        // Coordenadas base
-        val leftColX = paddingPx
+        // Coordenadas
+        val leftColX   = paddingPx
         val centerColX = measuredWidth / 2f
-        val rightColX = measuredWidth - paddingPx
+        val rightColX  = measuredWidth - paddingPx
 
-        // Se houver banner, empurrar conteúdo para baixo
         val bannerOffsetY = if (bannerText != null)
-            (bannerPadVPx * 2 + bannerTextPaint.textSize) + textSpacingVerticalPx
-        else 0f
+            (bannerPadVPx * 2 + bannerTextPaint.textSize) + textSpacingVerticalPx else 0f
 
         val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight)
         val topLabelY = paddingPx + bannerOffsetY + labelHeight - labelTextPaint.descent()
         val topValueY = topLabelY + topHighlightHeight + textSpacingVerticalPx
 
-        val topValueKmBaseline = topValueY - highlightValueTextPaint.descent()
+        val topValueKmBaseline   = topValueY - highlightValueTextPaint.descent()
         val topValueHourBaseline = topValueY - extraHighlightValueTextPaint.descent()
 
         val bottomLabelY = topValueY + lineSpacingVerticalPx + labelHeight - labelTextPaint.descent()
@@ -373,16 +370,16 @@ class OverlayView(context: Context) : View(context) {
         )
 
         val kmValueTextWidth = max(highlightValueTextPaint.measureText(euroPerKmStr), minTextWidthForBarSpacing)
-        val kmIndicatorLeft = leftColX + kmValueTextWidth + indicatorBarMarginPx
+        val kmIndicatorLeft  = leftColX + kmValueTextWidth + indicatorBarMarginPx
         val kmIndicatorRight = kmIndicatorLeft + indicatorBarWidthPx
 
         val hourValueTextWidth = max(extraHighlightValueTextPaint.measureText(euroPerHourStr), minTextWidthForBarSpacing)
         val hourIndicatorRight = rightColX - hourValueTextWidth - indicatorBarMarginPx
-        val hourIndicatorLeft = hourIndicatorRight - indicatorBarWidthPx
+        val hourIndicatorLeft  = hourIndicatorRight - indicatorBarWidthPx
 
-        val kmIndicatorTop = topValueKmBaseline + highlightValueTextPaint.ascent()
+        val kmIndicatorTop    = topValueKmBaseline + highlightValueTextPaint.ascent()
         val kmIndicatorBottom = topValueKmBaseline + highlightValueTextPaint.descent()
-        val hourIndicatorTop = topValueHourBaseline + extraHighlightValueTextPaint.ascent()
+        val hourIndicatorTop    = topValueHourBaseline + extraHighlightValueTextPaint.ascent()
         val hourIndicatorBottom = topValueHourBaseline + extraHighlightValueTextPaint.descent()
 
         val textAlpha = (viewAlpha * 255).toInt()
@@ -393,7 +390,7 @@ class OverlayView(context: Context) : View(context) {
         placeholderTextPaint.alpha = textAlpha
         indicatorPaint.alpha = textAlpha
 
-        // Coluna 1
+        // Coluna 1 (€/Km + km totais)
         labelTextPaint.textAlign = Paint.Align.LEFT
         highlightValueTextPaint.textAlign = Paint.Align.LEFT
         valueTextPaint.textAlign = Paint.Align.LEFT
@@ -418,7 +415,7 @@ class OverlayView(context: Context) : View(context) {
         valueTextPaint.color = TEXT_COLOR_VALUE
         canvas.drawText(totalKmStr, leftColX, bottomValueY, valueTextPaint)
 
-        // Coluna 2
+        // Coluna 2 (tempo)
         labelTextPaint.textAlign = Paint.Align.CENTER
         valueTextPaint.textAlign = Paint.Align.CENTER
         labelTextPaint.color = TEXT_COLOR_LABEL
@@ -426,7 +423,7 @@ class OverlayView(context: Context) : View(context) {
         valueTextPaint.color = TEXT_COLOR_VALUE
         canvas.drawText(totalTimeStr, centerColX, topValueKmBaseline, valueTextPaint)
 
-        // Coluna 3
+        // Coluna 3 (€/Hora + valor oferta)
         labelTextPaint.textAlign = Paint.Align.RIGHT
         extraHighlightValueTextPaint.textAlign = Paint.Align.RIGHT
         valueTextPaint.textAlign = Paint.Align.RIGHT
@@ -471,12 +468,9 @@ class OverlayView(context: Context) : View(context) {
         invalidate()
     }
 
-    /**
-     * Mostra um pequeno banner no topo do overlay.
-     * Ex.: showBanner("Meta atingida", BannerType.SUCCESS, 2500)
-     */
+    /** Mostra um pequeno banner no topo do overlay. */
     fun showBanner(text: String, type: BannerType = BannerType.INFO, durationMs: Long = 2500L) {
-        bannerText = text.take(60) // evitar banners enormes
+        bannerText = text.take(60)
         bannerType = type
         bannerClearAt = if (durationMs > 0) System.currentTimeMillis() + durationMs else 0L
         announceForAccessibility(text)
@@ -489,15 +483,25 @@ class OverlayView(context: Context) : View(context) {
     private fun getBorderColor(rating: BorderRating): Int = when (rating) {
         BorderRating.GREEN -> BORDER_COLOR_GREEN
         BorderRating.YELLOW -> BORDER_COLOR_YELLOW
-        BorderRating.RED -> BORDER_COLOR_RED
-        BorderRating.GRAY -> BORDER_COLOR_GRAY
+        BorderRating.RED    -> BORDER_COLOR_RED
+        BorderRating.GRAY   -> BORDER_COLOR_GRAY
     }
 
     private fun getIndicatorColor(rating: IndividualRating): Int = when (rating) {
-        IndividualRating.GOOD -> INDICATOR_COLOR_GOOD
-        IndividualRating.MEDIUM -> INDICATOR_COLOR_MEDIUM
-        IndividualRating.POOR -> INDICATOR_COLOR_POOR
+        IndividualRating.GOOD    -> INDICATOR_COLOR_GOOD
+        IndividualRating.MEDIUM  -> INDICATOR_COLOR_MEDIUM
+        IndividualRating.POOR    -> INDICATOR_COLOR_POOR
         IndividualRating.UNKNOWN -> INDICATOR_COLOR_UNKNOWN
+    }
+
+    /** Regra canónica do halo. */
+    private fun recomputeCombinedBorder(km: IndividualRating, hour: IndividualRating): BorderRating {
+        return when {
+            km == IndividualRating.UNKNOWN || hour == IndividualRating.UNKNOWN -> BorderRating.GRAY
+            km == IndividualRating.GOOD && hour == IndividualRating.GOOD       -> BorderRating.GREEN
+            km == IndividualRating.POOR && hour == IndividualRating.POOR       -> BorderRating.RED
+            else                                                               -> BorderRating.YELLOW
+        }
     }
 
     override fun onDetachedFromWindow() {
