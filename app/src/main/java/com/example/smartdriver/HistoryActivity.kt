@@ -3,11 +3,14 @@ package com.example.smartdriver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Typeface
 import android.os.Bundle
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -20,6 +23,7 @@ import com.google.gson.JsonSyntaxException
 import com.google.gson.reflect.TypeToken
 import java.text.NumberFormat
 import java.util.Locale
+import kotlin.math.max
 
 class HistoryActivity : AppCompatActivity() {
 
@@ -72,34 +76,113 @@ class HistoryActivity : AppCompatActivity() {
         Log.d(TAG, "RecyclerView configurado (click=editar, longClick=apagar).")
     }
 
-    // ---------------- Editar valor efetivo ----------------
+    // ---------------- Editar valor/distância/tempo ----------------
 
     private fun showEditDialog(entry: TripHistoryEntry, position: Int) {
         val currentEff = getEffectiveValue(entry)
-        val edit = EditText(this).apply {
-            hint = "Valor efetivo (€)"
-            setText(if (currentEff > 0) String.format(Locale.US, "%.2f", currentEff) else "")
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        val currentKm = entry.initialDistanceKm ?: 0.0
+        val currentDurSec = max(0L, entry.durationSeconds)
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
         }
 
+        // --- Valor efetivo (€)
+        container.addView(makeLabel("Valor efetivo (€)" +
+        currentEff.takeIf { it > 0 }?.let { "  •  atual: ${currencyPT.format(it)}" } ?: ""))
+
+        val etValor = EditText(this).apply {
+            hint = "Ex.: 6,50"
+            setText(if (currentEff > 0) String.format(Locale.US, "%.2f", currentEff) else "")
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                    android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        container.addView(etValor)
+
+        // --- Distância (km)
+        container.addView(makeLabel("Distância (km)" +
+        currentKm.takeIf { it > 0 }?.let { String.format(Locale.US, "  •  atual: %.2f km", it) } ?: ""))
+
+        val etKm = EditText(this).apply {
+            hint = "Ex.: 3,20"
+            setText(if (currentKm > 0) String.format(Locale.US, "%.2f", currentKm) else "")
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                    android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        container.addView(etKm)
+
+        // --- Duração (mm:ss)
+        container.addView(makeLabel("Duração (mm:ss)" +
+        currentDurSec.takeIf { it > 0 }?.let { "  •  atual: ${formatDurationPrefill(it)}" } ?: ""))
+
+        val etDur = EditText(this).apply {
+            hint = "Ex.: 12:30"
+            setText(if (currentDurSec > 0) formatDurationPrefill(currentDurSec) else "")
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+        }
+        container.addView(etDur)
+
         AlertDialog.Builder(this)
-            .setTitle("Editar valor efetivo")
-            .setView(edit)
+            .setTitle("Editar registo (valor, kms e tempo)")
+            .setView(container)
             .setPositiveButton("Guardar") { dialog, _ ->
-                val txt = edit.text?.toString()?.replace(",", ".")?.trim()
-                val newEff = txt?.toDoubleOrNull()
-                if (newEff == null || newEff <= 0.0) {
-                    Toast.makeText(this, "Valor inválido", Toast.LENGTH_SHORT).show()
-                } else {
-                    applyEditToHistory(entry, position, newEff)
+                // Valor (€)
+                val newEff = etValor.text?.toString()
+                    ?.replace(",", ".")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.toDoubleOrNull()
+                    ?.takeIf { it >= 0.0 }
+
+                // Distância (km)
+                val newKm = etKm.text?.toString()
+                    ?.replace(",", ".")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.toDoubleOrNull()
+                    ?.takeIf { it >= 0.0 }
+
+                // Duração (segundos)
+                val newDurSec = etDur.text?.toString()
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { parseDurationFlexible(it) }
+
+                if (etDur.text?.isNotEmpty() == true && newDurSec == null) {
+                    Toast.makeText(this, "Duração inválida. Use mm:ss (ex.: 12:30).", Toast.LENGTH_LONG).show()
+                    dialog.dismiss()
+                    return@setPositiveButton
                 }
+
+                if (newEff == null && newKm == null && newDurSec == null) {
+                    Toast.makeText(this, "Nada para atualizar.", Toast.LENGTH_SHORT).show()
+                    dialog.dismiss()
+                    return@setPositiveButton
+                }
+
+                applyEditToHistory(entry, position, newEff, newKm, newDurSec)
                 dialog.dismiss()
             }
             .setNegativeButton("Cancelar", null)
             .show()
     }
 
-    private fun applyEditToHistory(entryToEdit: TripHistoryEntry, position: Int, newEffective: Double) {
+    private fun makeLabel(text: String): TextView =
+        TextView(this).apply {
+            this.text = text
+            setTypeface(typeface, Typeface.BOLD)
+            textSize = 14f
+            setPadding(0, dp(12), 0, dp(6))
+        }
+
+    private fun applyEditToHistory(
+        entryToEdit: TripHistoryEntry,
+        position: Int,
+        newEffective: Double?,
+        newDistanceKm: Double?,
+        newDurationSec: Long?
+    ) {
         try {
             val currentHistoryJson = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
             val listType = object : TypeToken<MutableList<String>>() {}.type
@@ -126,7 +209,12 @@ class HistoryActivity : AppCompatActivity() {
             }
 
             val oldEff = getEffectiveValue(oldEntryObj)
-            val updated = oldEntryObj.copy(effectiveValue = newEffective)
+
+            val updated = oldEntryObj.copy(
+                effectiveValue = newEffective ?: oldEntryObj.effectiveValue,
+                initialDistanceKm = newDistanceKm ?: oldEntryObj.initialDistanceKm,
+                durationSeconds = newDurationSec ?: oldEntryObj.durationSeconds
+            )
 
             jsonList[indexToUpdate] = gson.toJson(updated)
             historyPrefs.edit().putString(OverlayService.KEY_TRIP_HISTORY, gson.toJson(jsonList)).apply()
@@ -138,20 +226,26 @@ class HistoryActivity : AppCompatActivity() {
                 loadHistoryData()
             }
 
-            val delta = newEffective - oldEff
+            val newEffForDelta = getEffectiveValue(updated)
+            val delta = newEffForDelta - oldEff
             if (delta != 0.0) {
                 val intent = Intent(this, com.example.smartdriver.overlay.OverlayService::class.java).apply {
                     action = OverlayService.ACTION_APPLY_SHIFT_DELTA
                     putExtra(OverlayService.EXTRA_TRIP_START_MS, updated.startTimeMillis)
                     putExtra(OverlayService.EXTRA_OLD_EFFECTIVE, oldEff)
-                    putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, newEffective)
+                    putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, newEffForDelta)
                 }
                 try { startService(intent) } catch (_: Exception) {}
             }
 
+            val parts = mutableListOf<String>()
+            newEffective?.let { parts.add("Valor → ${currencyPT.format(it)}") }
+            newDistanceKm?.let { parts.add(String.format(Locale.US, "Distância → %.2f km", it)) }
+            newDurationSec?.let { parts.add("Duração → ${formatDurationPrefill(it)}") }
+
             Toast.makeText(
                 this,
-                "Atualizado para ${currencyPT.format(newEffective)} (Δ ${currencyPT.format(delta)})",
+                if (parts.isEmpty()) "Atualização concluída." else "Atualizado: ${parts.joinToString(" | ")}",
                 Toast.LENGTH_LONG
             ).show()
 
@@ -254,7 +348,7 @@ class HistoryActivity : AppCompatActivity() {
             } else {
                 historyList.clear()
                 historyList.addAll(loadedEntries.sortedByDescending { it.startTimeMillis })
-                historyAdapter.notifyDataSetChanged()
+                historyAdapter.updateData(historyList)
                 showEmptyState(false)
                 Log.i(TAG, "Histórico carregado: ${historyList.size} itens.")
             }
@@ -271,5 +365,38 @@ class HistoryActivity : AppCompatActivity() {
         binding.recyclerViewHistory.visibility = if (show) View.GONE else View.VISIBLE
         binding.textViewEmptyHistory.visibility = if (show) View.VISIBLE else View.GONE
         if (show) { binding.textViewEmptyHistory.text = message ?: "Nenhum histórico encontrado." }
+    }
+
+    // ---------------- Helpers ----------------
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun formatDurationPrefill(seconds: Long): String {
+        val mm = seconds / 60
+        val ss = seconds % 60
+        return String.format(Locale.US, "%02d:%02d", mm, ss)
+    }
+
+    /**
+     * Aceita:
+     *  - "mm:ss" (ex.: "12:30")
+     *  - "m" (minutos) => converte para segundos
+     *  - "ss" (segundos)
+     *  Se for número simples, assume minutos quando <= 600 (10h), caso contrário assume segundos.
+     */
+    private fun parseDurationFlexible(input: String): Long? {
+        val t = input.trim()
+        return if (t.contains(":")) {
+            val parts = t.split(":")
+            if (parts.size != 2) return null
+            val mm = parts[0].toLongOrNull() ?: return null
+            val ss = parts[1].toLongOrNull() ?: return null
+            if (mm < 0 || ss < 0 || ss >= 60) return null
+            mm * 60 + ss
+        } else {
+            val num = t.toLongOrNull() ?: return null
+            if (num < 0) return null
+            if (num <= 600) num * 60 else num
+        }
     }
 }

@@ -7,92 +7,45 @@
     android:fillViewport="true"
     android:background="@color/white">
 
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/mainRootLayout"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="16dp"
-        tools:context=".MainActivity">
+        android:orientation="vertical"
+        android:padding="16dp">
 
-        <!-- Título -->
-        <TextView
-            android:id="@+id/titleTextView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textSize="24sp"
-            android:textStyle="bold"
-            android:textColor="@color/black"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <!-- Status App ON/OFF -->
+        <!-- Estado + switch principal -->
         <LinearLayout
             android:id="@+id/appStatusContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:orientation="horizontal"
             android:gravity="center_vertical"
-            app:layout_constraintTop_toBottomOf="@+id/titleTextView"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
+            android:orientation="horizontal">
+
             <TextView
                 android:id="@+id/appStatusText"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="@string/app_status_off"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:textStyle="bold"
                 android:textColor="@color/gray_inactive" />
+
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/appStatusSwitch"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checked="false"
                 app:thumbTint="@color/switch_thumb_selector"
-                app:trackTint="@color/switch_track_selector"/>
+                app:trackTint="@color/switch_track_selector" />
         </LinearLayout>
 
         <View
             android:id="@+id/divider_status"
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:layout_marginTop="16dp"
-            android:background="@color/gray_divider"
-            app:layout_constraintTop_toBottomOf="@+id/appStatusContainer" />
-
-        <!-- Instruções -->
-        <TextView
-            android:id="@+id/instructionsHeaderTextView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/main_activity_instructions_title"
-            android:textStyle="bold"
-            android:textColor="@color/black"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/divider_status" />
-        <TextView
-            android:id="@+id/instructionsTextView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/main_activity_instructions_text"
-            android:textSize="14sp"
-            android:textColor="@color/black"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/instructionsHeaderTextView" />
-
-        <View
-            android:id="@+id/divider_instructions"
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="16dp"
-            android:background="@color/gray_divider"
-            app:layout_constraintTop_toBottomOf="@+id/instructionsTextView" />
+            android:layout_marginTop="12dp"
+            android:background="@color/gray_divider" />
 
         <!-- Permissões -->
         <TextView
@@ -100,136 +53,187 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Permissões Necessárias:"
+            android:text="Permissões Necessárias"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:textColor="@color/black"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/divider_instructions" />
+            android:textColor="@color/black" />
 
-        <!-- Acessibilidade -->
-        <TextView
-            android:id="@+id/accessibilityStatusTextView"
-            android:layout_width="0dp"
+        <!-- CARD: Acessibilidade -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:layout_marginEnd="8dp"
-            android:text="1. Acessibilidade: Inativo"
-            android:textColor="@color/gray_inactive"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/accessibilityButton"
-            app:layout_constraintTop_toBottomOf="@+id/permissionsTitleTextView"
-            app:layout_constraintBaseline_toBaselineOf="@+id/accessibilityButton"/>
-        <Button
-            android:id="@+id/accessibilityButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Ativar"
-            android:minWidth="100dp"
-            android:layout_marginTop="8dp"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/permissionsTitleTextView" />
+            android:layout_marginTop="10dp"
+            app:cardCornerRadius="16dp"
+            app:cardUseCompatPadding="true">
 
-        <!-- Overlay -->
-        <TextView
-            android:id="@+id/overlayStatusTextView"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:layout_marginEnd="8dp"
-            android:text="2. Overlay: Não Permitido"
-            android:textColor="@color/gray_inactive"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/overlayButton"
-            app:layout_constraintTop_toBottomOf="@+id/accessibilityButton"
-            app:layout_constraintBaseline_toBaselineOf="@+id/overlayButton"/>
-        <Button
-            android:id="@+id/overlayButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Permitir"
-            android:minWidth="100dp"
-            android:layout_marginTop="8dp"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/accessibilityButton" />
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
+                android:paddingStart="16dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp">
 
-        <!-- Captura -->
-        <TextView
-            android:id="@+id/captureStatusTextView"
-            android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/accessibilityStatusTextView"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:text="1. Acessibilidade"
+                    android:textColor="@color/black"
+                    android:textSize="16sp"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toStartOf="@+id/accessibilityPermSwitch"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_goneMarginEnd="12dp" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/accessibilityPermSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:thumbTint="@color/switch_thumb_selector"
+                    app:trackTint="@color/switch_track_selector" />
+            </androidx.constraintlayout.widget.ConstraintLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- CARD: Overlay -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:layout_marginEnd="8dp"
-            android:text="3. Captura: Não Permitida"
-            android:textColor="@color/gray_inactive"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/overlayButton" />
+            android:layout_marginTop="10dp"
+            app:cardCornerRadius="16dp"
+            app:cardUseCompatPadding="true">
+
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
+                android:paddingStart="16dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp">
+
+                <TextView
+                    android:id="@+id/overlayStatusTextView"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:text="2. Overlay"
+                    android:textColor="@color/black"
+                    android:textSize="16sp"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toStartOf="@+id/overlayPermSwitch"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_goneMarginEnd="12dp" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/overlayPermSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:thumbTint="@color/switch_thumb_selector"
+                    app:trackTint="@color/switch_track_selector" />
+            </androidx.constraintlayout.widget.ConstraintLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- CARD: Captura (apenas estado; sem switch) -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            app:cardCornerRadius="16dp"
+            app:cardUseCompatPadding="true">
+
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp">
+
+                <TextView
+                    android:id="@+id/captureStatusLabel"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:text="3. Captura"
+                    android:textColor="@color/black"
+                    android:textSize="16sp"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintEnd_toStartOf="@+id/captureStatusText"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_goneMarginEnd="12dp" />
+
+                <TextView
+                    android:id="@+id/captureStatusText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Não permitida"
+                    android:textColor="@color/black"
+                    android:textSize="14sp"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintBottom_toBottomOf="parent" />
+            </androidx.constraintlayout.widget.ConstraintLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <View
             android:id="@+id/divider_permissions"
             android:layout_width="match_parent"
             android:layout_height="1dp"
             android:layout_marginTop="16dp"
-            android:background="@color/gray_divider"
-            app:layout_constraintTop_toBottomOf="@+id/captureStatusTextView" />
+            android:background="@color/gray_divider" />
 
-        <!-- Botões de Ação -->
-        <Button
+        <!-- Ações -->
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/settingsButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/settings_button"
-            android:textColor="@color/black"
-            app:strokeColor="@color/black"
-            app:layout_constraintTop_toBottomOf="@+id/divider_permissions"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"/>
+            app:icon="@drawable/ic_settings_24"
+            app:iconGravity="textStart"
+            app:iconPadding="8dp"
+            app:iconTint="@color/black" />
 
-        <!-- BOTÃO HISTÓRICO -->
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/historyButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="VER HISTÓRICO"
-            android:textColor="@color/black"
-            app:strokeColor="@color/black"
-            app:layout_constraintTop_toBottomOf="@+id/settingsButton"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"/>
+            android:text="VER HISTÓRICO" />
 
-        <!-- Switch Salvar Imagens -->
         <androidx.appcompat.widget.SwitchCompat
             android:id="@+id/saveImagesSwitch"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="12dp"
             android:text="@string/save_images_switch_label"
             android:textColor="@color/black"
             android:checked="false"
             app:thumbTint="@color/switch_thumb_selector"
-            app:trackTint="@color/switch_track_selector"
-            app:layout_constraintTop_toBottomOf="@+id/historyButton" /> <!-- Abaixo do botão histórico -->
+            app:trackTint="@color/switch_track_selector" />
 
-        <!-- Botão Shutdown -->
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/shutdownButton"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:layout_marginBottom="16dp"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="8dp"
             android:text="@string/shutdown_button"
-            android:textColor="@color/white"
-            android:backgroundTint="@color/black"
-            app:layout_constraintTop_toBottomOf="@+id/saveImagesSwitch"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintVertical_bias="0.0" /> <!-- Para não colar no fundo se houver espaço -->
+            app:backgroundTint="@color/black"
+            app:iconTint="@color/white"
+            android:textColor="@color/white" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
+    </LinearLayout>
 </ScrollView>

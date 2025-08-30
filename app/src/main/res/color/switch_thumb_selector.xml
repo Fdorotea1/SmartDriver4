@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:color="@color/black" android:state_checked="true" /> <!-- Cor do "polegar" quando LIGADO -->
-    <item android:color="#BDBDBD" /> <!-- Cor do "polegar" quando DESLIGADO (Cinza) -->
+    <!-- ON -->
+    <item android:state_enabled="true" android:state_checked="true"
+        android:color="@color/switch_on_thumb"/>
+    <!-- ON + disabled -->
+    <item android:state_enabled="false" android:state_checked="true"
+        android:alpha="0.5" android:color="@color/switch_on_thumb"/>
+
+    <!-- OFF -->
+    <item android:state_enabled="true" android:state_checked="false"
+        android:color="@color/switch_off_thumb"/>
+    <!-- OFF + disabled -->
+    <item android:state_enabled="false"
+        android:alpha="0.5" android:color="@color/switch_off_thumb"/>
 </selector>

@@ -1,9 +1,13 @@
 package com.example.smartdriver.overlay
 
 import android.annotation.SuppressLint
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.text.TextPaint
@@ -12,6 +16,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.animation.LinearInterpolator
+import com.example.smartdriver.utils.BorderRating
+import com.example.smartdriver.utils.IndividualRating
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -19,8 +26,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import com.example.smartdriver.utils.BorderRating
-import com.example.smartdriver.utils.IndividualRating
 
 @SuppressLint("ClickableViewAccessibility")
 class TrackingOverlayView(
@@ -40,7 +45,7 @@ class TrackingOverlayView(
         private val BORDER_COLOR_GRAY = Color.parseColor("#9E9E9E")
 
         private val METRIC_COLOR_GOOD = BORDER_COLOR_GREEN
-        private val METRIC_COLOR_MEDIUM = Color.parseColor("#FF9800")
+        private val METRIC_COLOR_MEDIUM = BORDER_COLOR_YELLOW
         private val METRIC_COLOR_POOR = BORDER_COLOR_RED
         private val METRIC_COLOR_UNKNOWN = Color.DKGRAY
 
@@ -55,6 +60,12 @@ class TrackingOverlayView(
 
         private const val DRAG_ACTIVATION_DELAY_MS = 120L
         private const val DRAG_DISTANCE_FACTOR = 1.5f
+
+        // Pulso — intensificado
+        private const val PULSE_DURATION_MS = 1800L
+        private const val PULSE_MIN_ALPHA = 120     // 0..255 (antes 60)
+        private const val PULSE_MAX_ALPHA = 255     // (antes 170)
+        private const val PULSE_EXTRA_WIDTH_FACTOR = 2.0f // (antes 1.4f)
     }
 
     // páginas: 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta
@@ -66,6 +77,7 @@ class TrackingOverlayView(
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BG_COLOR }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val haloPulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val mainPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_MAIN; typeface = Typeface.DEFAULT_BOLD }
     private val legendPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = LEGEND_COLOR }
 
@@ -85,28 +97,38 @@ class TrackingOverlayView(
     private var initialTouchRawY: Float = 0f
     private val dragReadyRunnable = Runnable { dragReady = true; dragDelayPosted = false }
 
-    // dados tempo/€/h
+    // dados tempo/€/h (tempo real)
     private var currentValuePerHour: Double? = null
     private var currentHourRating: IndividualRating = IndividualRating.UNKNOWN
     private var elapsedTimeSeconds: Long = 0
 
-    // dados iniciais (estáticos do semáforo)
+    // dados iniciais (semáforo)
     private var initialValuePerKm: Double? = null
     private var initialTotalDistance: Double? = null
     private var offerValueRaw: String? = null
     private var initialTotalDurationMinutes: Int? = null
     private var initialKmRating: IndividualRating = IndividualRating.UNKNOWN
-    private var combinedBorderRating: BorderRating = BorderRating.GRAY
+    private var initialHourRating: IndividualRating? = null
+
+    // cor/estado do halo (mantido do semáforo)
+    private var initialBorderRating: BorderRating = BorderRating.GRAY
+    private var currentBorderRating: BorderRating = BorderRating.GRAY
 
     // ecrã
     private var screenW = 1080
     private var screenH = 1920
 
+    // formatação
     private val euroSymbols = DecimalFormatSymbols(Locale.US)
     private val dfHour1 = DecimalFormat("0.0", euroSymbols)
     private val dfKm1 = DecimalFormat("0.0", euroSymbols)
     private val dfVal = DecimalFormat("0.00", euroSymbols)
     private val dfEurKm = DecimalFormat("0.00", euroSymbols)
+
+    // pulso
+    private var pulseEnabled = true
+    private var pulseProgress = 0f // 0..1
+    private var pulseAnimator: ValueAnimator? = null
 
     init {
         val dm = resources.displayMetrics
@@ -119,6 +141,7 @@ class TrackingOverlayView(
         safeMarginPx = (SAFE_MARGIN_DP * density).toInt()
 
         borderPaint.strokeWidth = borderWidthPx
+        haloPulsePaint.strokeWidth = borderWidthPx * PULSE_EXTRA_WIDTH_FACTOR
         mainPaint.textSize = MAIN_TEXT_SP * scaled
         legendPaint.textSize = LEGEND_TEXT_SP * scaled
         recalcTextMetrics()
@@ -200,6 +223,43 @@ class TrackingOverlayView(
         }
     }
 
+    // ---------- Ciclo de vida p/ pulso ----------
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (pulseEnabled) startPulse()
+    }
+
+    override fun onDetachedFromWindow() {
+        stopPulse()
+        super.onDetachedFromWindow()
+    }
+
+    private fun startPulse() {
+        if (pulseAnimator != null) return
+        pulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = PULSE_DURATION_MS
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener {
+                pulseProgress = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun stopPulse() {
+        pulseAnimator?.cancel()
+        pulseAnimator = null
+    }
+
+    fun setPulseEnabled(enabled: Boolean) {
+        pulseEnabled = enabled
+        if (enabled) startPulse() else stopPulse()
+        invalidate()
+    }
+
     private fun cancelDragDelay() {
         if (dragDelayPosted) {
             mainHandler.removeCallbacks(dragReadyRunnable)
@@ -228,14 +288,24 @@ class TrackingOverlayView(
         initialTotalDurationMinutes = iDur
         offerValueRaw = oVal
         initialKmRating = iKmR
-        combinedBorderRating = cBR
+
+        initialBorderRating = cBR
+        currentBorderRating = cBR // começa com a cor do semáforo
         invalidate()
     }
 
+    /** Força a cor de "€/h prev." com a nota do semáforo (horária). */
+    fun setInitialHourRatingFromSemaphore(r: IndividualRating) {
+        initialHourRating = r
+        invalidate()
+    }
+
+    /** Atualiza o €/h e a classificação em tempo real (usada para a cor do “€/h atual”). */
     fun updateRealTimeData(cVph: Double?, hR: IndividualRating, elSec: Long) {
         currentValuePerHour = cVph
         currentHourRating = hR
         elapsedTimeSeconds = elSec
+        // NÃO mexemos no halo aqui (mantém-se o do semáforo).
         invalidate()
     }
 
@@ -277,20 +347,37 @@ class TrackingOverlayView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        mainPaint.color = TEXT_COLOR_MAIN
 
-        borderPaint.color = when (combinedBorderRating) {
-            BorderRating.GREEN -> BORDER_COLOR_GREEN
-            BorderRating.YELLOW -> BORDER_COLOR_YELLOW
-            BorderRating.RED -> BORDER_COLOR_RED
-            else -> BORDER_COLOR_GRAY
-        }
+        // Cor do halo (dinâmica conforme estado combinado inicial – mantido)
+        val borderColor = borderColorFor(currentBorderRating)
+        borderPaint.color = borderColor
 
         val cx = width / 2f
         val cy = height / 2f
         val radius = (min(width, height) / 2f) - borderWidthPx / 2f
 
+        // fundo + moldura
         canvas.drawCircle(cx, cy, radius, bgPaint)
         canvas.drawCircle(cx, cy, radius, borderPaint)
+
+        // --- NOVO: anel sólido (dá mais densidade ao halo) ---
+        val solidHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = borderWidthPx * 1.25f   // mais grosso que a moldura
+            color = borderColor
+            alpha = 230                            // bastante opaco
+        }
+        canvas.drawCircle(cx, cy, radius, solidHaloPaint)
+        // ------------------------------------------------------
+
+        // pulso suave (auréola animada)
+        if (pulseEnabled) {
+            val alpha = (PULSE_MIN_ALPHA + (PULSE_MAX_ALPHA - PULSE_MIN_ALPHA) * pulseProgress).toInt()
+            haloPulsePaint.color = withAlpha(borderColor, alpha)
+            haloPulsePaint.strokeWidth = borderWidthPx * (1f + PULSE_EXTRA_WIDTH_FACTOR * pulseProgress)
+            canvas.drawCircle(cx, cy, radius, haloPulsePaint)
+        }
 
         when (pageIndex) {
             0 -> { // Tempo: [inicial | decorrido]
@@ -307,12 +394,23 @@ class TrackingOverlayView(
             1 -> { // €/h: [prev. | atual]
                 val topLegend = "€/h prev."
                 val bottomLegend = "€/h atual"
+
                 val prev = calcEuroPerHourPlanned().let { if (it != "--.-") "€ $it" else "€ --.-" }
                 val currVal = currentValuePerHour?.let { "€ " + dfHour1.format(it) } ?: "€ --.-"
+
+                // IMPORTANTE: a linha de cima usa o rating HORÁRIO do semáforo (se houver), fallback: cor do anel convertida
+                val baseHourRating = initialHourRating ?: borderToIndividual(initialBorderRating)
+                val prevColor = ratingToColor(baseHourRating)
+
+                val currColor = if (currentHourRating != IndividualRating.UNKNOWN)
+                    ratingToColor(currentHourRating)
+                else
+                    prevColor
+
                 drawTwoLinesWithLegends(
                     canvas, cx, cy, radius,
-                    topLegend, prev, TEXT_COLOR_MAIN,
-                    bottomLegend, currVal, ratingToColor(currentHourRating)
+                    topLegend, prev, prevColor,
+                    bottomLegend, currVal, currColor
                 )
             }
             2 -> { // ESTÁTICO: €/km (cor) + km totais (preto)
@@ -329,7 +427,7 @@ class TrackingOverlayView(
             else -> { // Oferta
                 val legend = "oferta"
                 val valStr = parseOfferValue()?.let { "€ " + dfVal.format(it) }
-                    ?: offerValueRaw?.let { "€ " + it.replace("€","").trim() }
+                    ?: offerValueRaw?.let { "€ " + it.replace("€", "").trim() }
                     ?: "€ --"
                 drawSingleLineWithLegend(canvas, cx, cy, radius, legend, valStr)
             }
@@ -367,21 +465,21 @@ class TrackingOverlayView(
         val box = (radius - paddingPx) * 2f
 
         var mainSize = MAIN_TEXT_SP * resources.displayMetrics.scaledDensity
-        var legSize = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
+        var legSize  = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
 
+        // Base para métricas
         mainPaint.textSize = mainSize
         legendPaint.textSize = legSize
         recalcTextMetrics()
 
         fun widest(): Float {
-            val w1 = maxOf(mainPaint.measureText(lineTop), legendPaint.measureText(legendTop))
+            val w1 = maxOf(mainPaint.measureText(lineTop),    legendPaint.measureText(legendTop))
             val w2 = maxOf(mainPaint.measureText(lineBottom), legendPaint.measureText(legendBottom))
             return maxOf(w1, w2)
         }
-
         fun totalHeight(): Float {
             val gapLegend = paddingPx * 0.1f
-            val gapMain = paddingPx * 0.18f
+            val gapMain   = paddingPx * 0.18f
             val topBlock = legendTextHeight + gapLegend + mainTextHeight
             val bottomBlock = if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
             else legendTextHeight + gapLegend + mainTextHeight
@@ -391,7 +489,7 @@ class TrackingOverlayView(
         var attempts = 0
         while ((widest() > box || totalHeight() > box) && attempts < 28) {
             mainSize *= 0.92f
-            legSize *= 0.92f
+            legSize  *= 0.92f
             mainPaint.textSize = mainSize
             legendPaint.textSize = legSize
             recalcTextMetrics()
@@ -399,10 +497,9 @@ class TrackingOverlayView(
         }
 
         legendPaint.textAlign = Paint.Align.CENTER
-        mainPaint.textAlign = Paint.Align.CENTER
 
         val gapLegend = paddingPx * 0.1f
-        val gapMain = paddingPx * 0.18f
+        val gapMain   = paddingPx * 0.18f
 
         val topBlock = legendTextHeight + gapLegend + mainTextHeight
         val bottomBlock = if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
@@ -411,14 +508,20 @@ class TrackingOverlayView(
 
         var y = cy - total / 2f
 
+        // Legend topo
         if (legendTop.isNotBlank()) {
             val yLegTop = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
             canvas.drawText(legendTop, cx, yLegTop, legendPaint)
             y += legendTextHeight + gapLegend
         }
-        mainPaint.color = colorTop
-        val yTop = y - (mainPaint.descent() + mainPaint.ascent()) / 2f + mainTextHeight / 2f
-        canvas.drawText(lineTop, cx, yTop, mainPaint)
+
+        // Linha topo — PAINT dedicado
+        val paintTop = TextPaint(mainPaint).apply {
+            textAlign = Paint.Align.CENTER
+            color = colorTop
+        }
+        val yTop = y - (paintTop.descent() + paintTop.ascent()) / 2f + mainTextHeight / 2f
+        canvas.drawText(lineTop, cx, yTop, paintTop)
         y += mainTextHeight
 
         if (!(lineBottom.isBlank() && legendBottom.isBlank())) {
@@ -428,11 +531,15 @@ class TrackingOverlayView(
                 canvas.drawText(legendBottom, cx, yLegBottom, legendPaint)
                 y += legendTextHeight + gapLegend
             }
-            mainPaint.color = colorBottom
-            val yBottom = y - (mainPaint.descent() + mainPaint.ascent()) / 2f + mainTextHeight / 2f
-            canvas.drawText(lineBottom, cx, yBottom, mainPaint)
+
+            // Linha bottom — PAINT dedicado
+            val paintBottom = TextPaint(mainPaint).apply {
+                textAlign = Paint.Align.CENTER
+                color = colorBottom
+            }
+            val yBottom = y - (paintBottom.descent() + paintBottom.ascent()) / 2f + mainTextHeight / 2f
+            canvas.drawText(lineBottom, cx, yBottom, paintBottom)
         }
-        mainPaint.color = TEXT_COLOR_MAIN
     }
 
     private fun drawSingleLineWithLegend(
@@ -480,6 +587,7 @@ class TrackingOverlayView(
         canvas.drawText(line, cx, yVal, mainPaint)
     }
 
+    // ---------- util cores ----------
     private fun ratingToColor(r: IndividualRating): Int = when (r) {
         IndividualRating.GOOD -> METRIC_COLOR_GOOD
         IndividualRating.MEDIUM -> METRIC_COLOR_MEDIUM
@@ -487,6 +595,26 @@ class TrackingOverlayView(
         else -> METRIC_COLOR_UNKNOWN
     }
 
+    private fun borderColorFor(br: BorderRating): Int = when (br) {
+        BorderRating.GREEN -> BORDER_COLOR_GREEN
+        BorderRating.YELLOW -> BORDER_COLOR_YELLOW
+        BorderRating.RED -> BORDER_COLOR_RED
+        else -> BORDER_COLOR_GRAY
+    }
+
+    private fun borderToIndividual(br: BorderRating): IndividualRating = when (br) {
+        BorderRating.GREEN -> IndividualRating.GOOD
+        BorderRating.YELLOW -> IndividualRating.MEDIUM
+        BorderRating.RED -> IndividualRating.POOR
+        else -> IndividualRating.UNKNOWN
+    }
+
+    private fun withAlpha(color: Int, alpha: Int): Int {
+        val a = alpha.coerceIn(0, 255)
+        return (color and 0x00FFFFFF) or (a shl 24)
+    }
+
+    // ---------- util formatação ----------
     private fun formatHM(minutes: Int): String {
         val h = minutes / 60
         val m = minutes % 60

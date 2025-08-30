@@ -63,16 +63,18 @@ class HistoryAdapter(
     override fun onBindViewHolder(holder: HistoryViewHolder, position: Int) {
         val entry = historyList[position]
 
-        holder.startTimeTextView.text = "Início: ${dateTimeFormatter.format(Date(entry.startTimeMillis))}"
+        holder.startTimeTextView.text =
+            "Início: ${dateTimeFormatter.format(Date(entry.startTimeMillis))}"
 
         val durationMinutes = TimeUnit.SECONDS.toMinutes(entry.durationSeconds)
         val durationSecondsPart = entry.durationSeconds % 60
         holder.durationTextView.text = "Duração: ${durationMinutes}m ${durationSecondsPart}s"
 
         val effective = (entry.effectiveValue ?: entry.offerValue)?.takeIf { it > 0.0 }
-        holder.offerValueTextView.text = "Valor: ${effective?.let { currencyPT.format(it) } ?: placeholder}"
+        holder.offerValueTextView.text =
+            "Valor: ${effective?.let { currencyPT.format(it) } ?: placeholder}"
 
-        // €/h Real — calculado sempre a partir do valor efetivo/offerValue e da duração
+        // €/h Real — valor (efetivo ou oferta) / duração (horas)
         val durHours = if (entry.durationSeconds > 0L) entry.durationSeconds / 3600.0 else 0.0
         val vphRealtime = if (durHours > 0)
             (entry.effectiveValue ?: entry.offerValue)?.let { it / durHours }
@@ -83,10 +85,12 @@ class HistoryAdapter(
         holder.initialVpkTextView.text =
             "€/km Ini: ${entry.initialVpk?.let { String.format(Locale.US, "%.2f", it) } ?: placeholder}"
 
+        // O campo pode ter sido editado; apresentamos simplesmente "Dist" para não confundir
         holder.initialDistanceTextView.text =
-            "Dist Ini: ${entry.initialDistanceKm?.let { String.format(Locale.US, "%.1f km", it) } ?: placeholder}"
+            "Dist: ${entry.initialDistanceKm?.let { String.format(Locale.US, "%.2f km", it) } ?: placeholder}"
 
-        holder.serviceTypeTextView.text = entry.serviceType?.takeIf { it.isNotEmpty() } ?: placeholder
+        holder.serviceTypeTextView.text =
+            entry.serviceType?.takeIf { it.isNotEmpty() } ?: placeholder
 
         val indicatorColorResId = getIndicatorColorResId(entry.originalBorderRating)
         val color = ContextCompat.getColor(holder.itemView.context, indicatorColorResId)

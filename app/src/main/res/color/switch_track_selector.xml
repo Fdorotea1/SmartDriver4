@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:color="#757575" android:state_checked="true" /> <!-- Cor da "pista" quando LIGADO (Cinza Médio) -->
-    <item android:color="#E0E0E0" /> <!-- Cor da "pista" quando DESLIGADO (Cinza Claro) -->
+    <!-- ON -->
+    <item android:state_checked="true"
+        android:color="@color/switch_on_track"/>
+    <!-- OFF -->
+    <item android:color="@color/switch_off_track"/>
 </selector>

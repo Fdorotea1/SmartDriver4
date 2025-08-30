@@ -2,11 +2,7 @@ package com.example.smartdriver
 
 import android.Manifest
 import android.app.Activity
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.SharedPreferences
+import android.content.*
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -39,13 +35,14 @@ class MainActivity : AppCompatActivity() {
     private var isRequestingProjection = false
     private var lastProjectionLaunchAt = 0L
     private val PROJECTION_LAUNCH_COOLDOWN_MS = 2500L
-    private var currentFlowId = 0L
+
+    // Evitar loops ao sincronizar switches por código
+    private var isUpdatingPermSwitches = false
 
     // Receiver para desligar a app a partir do serviço/menu
     private val shutdownReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ACTION_SHUTDOWN_APP) {
-                Log.w(TAG, "[$currentFlowId] Recebido broadcast $ACTION_SHUTDOWN_APP. Encerrando MainActivity.")
                 finishAffinity()
             }
         }
@@ -63,7 +60,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        Log.d(TAG, "onCreate")
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -71,9 +67,9 @@ class MainActivity : AppCompatActivity() {
         setupResultLaunchers()
         setupButtonClickListeners()
         setupSwitches()
+        setupPermissionSwitches()
         requestNeededPermissions()
 
-        // Registar o receiver de shutdown
         val filter = IntentFilter(ACTION_SHUTDOWN_APP)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(shutdownReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -81,75 +77,29 @@ class MainActivity : AppCompatActivity() {
             registerReceiver(shutdownReceiver, filter)
         }
 
-        // Normaliza o estado do switch ao arranque (evita “ligado” enganoso)
         normalizeInitialSwitchState()
     }
 
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "onResume - Atualizando UI (sem normalize/auto-start)")
         updatePermissionStatusUI()
-        // ⚠️ NÃO chamamos normalizeInitialSwitchState() aqui.
         updateAppStatusUI(sharedPreferences.getBoolean(KEY_APP_ACTIVE, false))
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            unregisterReceiver(shutdownReceiver)
-            Log.d(TAG, "Shutdown receiver desregistrado.")
-        } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "Receiver já estava desregistado: ${e.message}")
-        }
+        try { unregisterReceiver(shutdownReceiver) } catch (_: IllegalArgumentException) {}
     }
 
-    // ---------- Listeners dos botões ----------
+    // ---------- Botões simples ----------
     private fun setupButtonClickListeners() {
-        // 1) Acessibilidade
-        binding.accessibilityButton.setOnClickListener {
-            Log.d(TAG, "A abrir definições de Acessibilidade")
-            try {
-                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                Toast.makeText(this, "Encontra 'SmartDriver Service' e ativa-o", Toast.LENGTH_LONG).show()
-                accessibilitySettingsLauncher.launch(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao abrir acessibilidade: ${e.message}")
-                Toast.makeText(this, "Não foi possível abrir as definições.", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        // 2) Overlay
-        binding.overlayButton.setOnClickListener {
-            Log.d(TAG, "A abrir definições de Overlay")
-            if (!Settings.canDrawOverlays(this)) {
-                try {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    overlaySettingsLauncher.launch(intent)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Erro ao abrir overlay: ${e.message}")
-                    Toast.makeText(this, "Não foi possível abrir as definições.", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(this, "Permissão de overlay já concedida", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        // Configurações
         binding.settingsButton.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
-
-        // Histórico
         binding.historyButton.setOnClickListener {
             startActivity(Intent(this, HistoryActivity::class.java))
         }
-
-        // Encerrar app
         binding.shutdownButton.setOnClickListener {
-            Log.w(TAG, "Shutdown via MainActivity")
             stopScreenCaptureService()
             stopOverlayService()
             MediaProjectionData.clear()
@@ -161,70 +111,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- Launchers de resultado ----------
+    // ---------- Launchers ----------
     private fun setupResultLaunchers() {
-        // Acessibilidade
         accessibilitySettingsLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
                 Handler(Looper.getMainLooper()).postDelayed({ updatePermissionStatusUI() }, 300)
             }
-
-        // Overlay
         overlaySettingsLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
                 Handler(Looper.getMainLooper()).postDelayed({ updatePermissionStatusUI() }, 300)
             }
-
-        // MediaProjection (captura de ecrã)
         mediaProjectionLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-                try {
-                    Log.d(TAG, "[$currentFlowId] mediaProjectionLauncher callback: resultCode=${result.resultCode}")
-                    if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-                        Log.d(TAG, "[$currentFlowId] Permissão de captura CONCEDIDA")
-                        MediaProjectionData.resultCode = result.resultCode
-                        MediaProjectionData.resultData = result.data?.clone() as Intent?
-                        Toast.makeText(this, "Permissão de captura concedida!", Toast.LENGTH_SHORT).show()
-
-                        if (binding.appStatusSwitch.isChecked) {
-                            val started = startServicesIfReady()
-                            if (started) {
-                                persistAppActive(true)
-                                updateAppStatusUI(true)
-                            } else {
-                                binding.appStatusSwitch.isChecked = false
-                                persistAppActive(false)
-                                updateAppStatusUI(false)
-                            }
+                if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                    MediaProjectionData.resultCode = result.resultCode
+                    MediaProjectionData.resultData = result.data?.clone() as Intent?
+                    Toast.makeText(this, "Permissão de captura concedida!", Toast.LENGTH_SHORT).show()
+                    if (binding.appStatusSwitch.isChecked) {
+                        val started = startServicesIfReady()
+                        if (started) {
+                            persistAppActive(true)
+                            updateAppStatusUI(true)
+                        } else {
+                            binding.appStatusSwitch.isChecked = false
+                            persistAppActive(false)
+                            updateAppStatusUI(false)
                         }
-                    } else {
-                        Log.w(TAG, "[$currentFlowId] Permissão de captura NEGADA")
-                        MediaProjectionData.clear()
-                        Toast.makeText(this, "Permissão de captura é necessária.", Toast.LENGTH_LONG).show()
-                        binding.appStatusSwitch.isChecked = false
-                        persistAppActive(false)
-                        updateAppStatusUI(false)
                     }
-                    updatePermissionStatusUI()
-                } finally {
-                    // Fecha o fluxo e abre cooldown
-                    isRequestingProjection = false
-                    lastProjectionLaunchAt = SystemClock.elapsedRealtime()
-                    Log.d(TAG, "[$currentFlowId] Fluxo fechado; cooldown iniciado.")
+                } else {
+                    MediaProjectionData.clear()
+                    Toast.makeText(this, "Permissão de captura é necessária.", Toast.LENGTH_LONG).show()
                 }
+                updatePermissionStatusUI()
+                isRequestingProjection = false
+                lastProjectionLaunchAt = SystemClock.elapsedRealtime()
             }
 
-        // Notificações (Android 13+)
         notificationPermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                if (isGranted) Log.i(TAG, "Permissão POST_NOTIFICATIONS concedida.")
-                else Log.w(TAG, "Permissão POST_NOTIFICATIONS negada.")
-            }
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
     }
 
     // ---------- Switch principal ----------
     private fun setupSwitches() {
-        // Lê “ativo” guardado
         val savedActive = sharedPreferences.getBoolean(KEY_APP_ACTIVE, false)
         binding.appStatusSwitch.isChecked = savedActive
         updateAppStatusUI(savedActive)
@@ -232,12 +160,8 @@ class MainActivity : AppCompatActivity() {
         val saveImagesEnabled = sharedPreferences.getBoolean(KEY_SAVE_IMAGES, false)
         binding.saveImagesSwitch.isChecked = saveImagesEnabled
 
-        // ON/OFF do Assistente
         binding.appStatusSwitch.setOnCheckedChangeListener { _, isChecked ->
-            Log.d(TAG, "AppStatusSwitch -> $isChecked")
-
             if (isChecked) {
-                // NÃO persistimos ainda; primeiro verificamos permissões/arranque
                 val allOk = hasAllCorePermissions()
                 if (allOk) {
                     val started = startServicesIfReady()
@@ -245,17 +169,14 @@ class MainActivity : AppCompatActivity() {
                         persistAppActive(true)
                         updateAppStatusUI(true)
                     } else {
-                        // Falhou arrancar → volta a OFF
                         binding.appStatusSwitch.isChecked = false
                         persistAppActive(false)
                         updateAppStatusUI(false)
                     }
                 } else {
-                    // Falta algo: corre o fluxo de permissões
                     checkPermissionsAndStartOrRequestCapture()
                 }
             } else {
-                // OFF: paramos serviços e persistimos OFF
                 stopScreenCaptureService()
                 stopOverlayService()
                 MediaProjectionData.clear()
@@ -265,7 +186,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Guardar screenshots para debug
         binding.saveImagesSwitch.setOnCheckedChangeListener { _, isChecked ->
             sharedPreferences.edit().putBoolean(KEY_SAVE_IMAGES, isChecked).apply()
             updateScreenCaptureSaveSetting(isChecked)
@@ -277,133 +197,142 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Garante que o switch inicial não fica “ligado” se faltar qualquer permissão.
-    // Se estava guardado como ativo e todas as permissões existem, arranca automaticamente.
-    private fun normalizeInitialSwitchState() {
-        val savedActive = sharedPreferences.getBoolean(KEY_APP_ACTIVE, false)
-        val allOk = hasAllCorePermissions()
-
-        when {
-            savedActive && allOk -> {
-                binding.appStatusSwitch.isChecked = true
-                val started = startServicesIfReady()
-                if (!started) {
-                    binding.appStatusSwitch.isChecked = false
-                    persistAppActive(false)
-                } else {
-                    persistAppActive(true)
+    // ---------- Switches de permissões ----------
+    private fun setupPermissionSwitches() {
+        // Acessibilidade
+        binding.accessibilityPermSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (isUpdatingPermSwitches) return@setOnCheckedChangeListener
+            val enabled = isAccessibilityServiceEnabled()
+            when {
+                isChecked && !enabled -> {
+                    Toast.makeText(this, "Ativar em Definições > Acessibilidade", Toast.LENGTH_SHORT).show()
+                    accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    syncPermissionSwitches()
                 }
-            }
-            savedActive && !allOk -> {
-                binding.appStatusSwitch.isChecked = false
-                persistAppActive(false)
-            }
-            else -> {
-                binding.appStatusSwitch.isChecked = false
-                persistAppActive(false)
+                !isChecked && enabled -> {
+                    Toast.makeText(this, "Desative manualmente o serviço em Acessibilidade.", Toast.LENGTH_SHORT).show()
+                    accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    syncPermissionSwitches()
+                }
             }
         }
 
+        // Overlay
+        binding.overlayPermSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (isUpdatingPermSwitches) return@setOnCheckedChangeListener
+            val canDraw = Settings.canDrawOverlays(this)
+            when {
+                isChecked && !canDraw -> {
+                    Toast.makeText(this, "Conceda a permissão de sobreposição.", Toast.LENGTH_SHORT).show()
+                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                    overlaySettingsLauncher.launch(intent)
+                    syncPermissionSwitches()
+                }
+                !isChecked && canDraw -> {
+                    Toast.makeText(this, "Desative a permissão de overlay nas definições.", Toast.LENGTH_SHORT).show()
+                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                    overlaySettingsLauncher.launch(intent)
+                    syncPermissionSwitches()
+                }
+            }
+        }
+    }
+
+    private fun syncPermissionSwitches() {
+        isUpdatingPermSwitches = true
+        try {
+            val acc = isAccessibilityServiceEnabled()
+            val ovl = Settings.canDrawOverlays(this)
+            val cap = MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
+
+            // switches + desativação quando já concedido
+            binding.accessibilityPermSwitch.isChecked = acc
+            binding.accessibilityPermSwitch.isEnabled = !acc
+            binding.accessibilityStatusTextView.setTextColor(
+                ContextCompat.getColor(this, if (acc) R.color.gray_inactive else R.color.black)
+            )
+
+            binding.overlayPermSwitch.isChecked = ovl
+            binding.overlayPermSwitch.isEnabled = !ovl
+            binding.overlayStatusTextView.setTextColor(
+                ContextCompat.getColor(this, if (ovl) R.color.gray_inactive else R.color.black)
+            )
+
+            // Captura: só estado (sem switch)
+            binding.captureStatusText.text = if (cap) "Sessão ativa" else "Não permitida"
+            binding.captureStatusText.setTextColor(
+                ContextCompat.getColor(this, if (cap) R.color.gray_inactive else R.color.black)
+            )
+        } finally {
+            isUpdatingPermSwitches = false
+        }
+    }
+
+    private fun normalizeInitialSwitchState() {
+        val savedActive = sharedPreferences.getBoolean(KEY_APP_ACTIVE, false)
+        val allOk = hasAllCorePermissions()
+        if (savedActive && allOk) {
+            binding.appStatusSwitch.isChecked = true
+            val started = startServicesIfReady()
+            if (!started) {
+                binding.appStatusSwitch.isChecked = false
+                persistAppActive(false)
+            } else persistAppActive(true)
+        } else {
+            binding.appStatusSwitch.isChecked = false
+            persistAppActive(false)
+        }
         updatePermissionStatusUI()
         updateAppStatusUI(sharedPreferences.getBoolean(KEY_APP_ACTIVE, false))
     }
 
     // ---------- Permissões ----------
     private fun checkPermissionsAndStartOrRequestCapture() {
-        // travão: fluxo em curso ou cooldown
         val now = SystemClock.elapsedRealtime()
-        if (isRequestingProjection || (now - lastProjectionLaunchAt) < PROJECTION_LAUNCH_COOLDOWN_MS) {
-            Log.w(TAG, "[$currentFlowId] checkPermissions abortado (em curso/cooldown).")
-            return
-        }
+        if (isRequestingProjection || (now - lastProjectionLaunchAt) < PROJECTION_LAUNCH_COOLDOWN_MS) return
 
-        Log.d(TAG, "Verificar permissões para iniciar")
-        val isAccessibilityEnabled = isAccessibilityServiceEnabled()
-        val canDrawOverlays = Settings.canDrawOverlays(this)
-        val hasCapture = MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
+        val acc = isAccessibilityServiceEnabled()
+        val ovl = Settings.canDrawOverlays(this)
+        val cap = MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
 
-        if (!isAccessibilityEnabled) {
+        if (!acc) {
             Toast.makeText(this, "Ative o Serviço de Acessibilidade (Item 1).", Toast.LENGTH_SHORT).show()
             binding.appStatusSwitch.isChecked = false
             persistAppActive(false)
-            updateAppStatusUI(false)
-            return
+            updateAppStatusUI(false); return
         }
-        if (!canDrawOverlays) {
+        if (!ovl) {
             Toast.makeText(this, "Permita o Overlay (Item 2).", Toast.LENGTH_SHORT).show()
             binding.appStatusSwitch.isChecked = false
             persistAppActive(false)
-            updateAppStatusUI(false)
-            return
+            updateAppStatusUI(false); return
         }
-        if (!hasCapture) {
+        if (!cap) {
             Toast.makeText(this, "Permita a Captura de Ecrã (Item 3).", Toast.LENGTH_SHORT).show()
-            requestScreenCapturePermission()
-            return
+            requestScreenCapturePermission(); return
         }
 
-        // Tudo pronto → arranca e persiste ON
         val started = startServicesIfReady()
-        if (started) {
-            persistAppActive(true)
-            updateAppStatusUI(true)
-        } else {
-            binding.appStatusSwitch.isChecked = false
-            persistAppActive(false)
-            updateAppStatusUI(false)
-        }
+        if (started) { persistAppActive(true); updateAppStatusUI(true) }
+        else { binding.appStatusSwitch.isChecked = false; persistAppActive(false); updateAppStatusUI(false) }
     }
 
     private fun requestScreenCapturePermission() {
         val now = SystemClock.elapsedRealtime()
-        if (isRequestingProjection || (now - lastProjectionLaunchAt) < PROJECTION_LAUNCH_COOLDOWN_MS) {
-            Log.w(TAG, "[$currentFlowId] requestScreenCapturePermission abortado (em curso/cooldown).")
-            return
-        }
+        if (isRequestingProjection || (now - lastProjectionLaunchAt) < PROJECTION_LAUNCH_COOLDOWN_MS) return
         try {
             isRequestingProjection = true
-            currentFlowId = System.currentTimeMillis()
-            lastProjectionLaunchAt = now
-            Log.i(TAG, "[$currentFlowId] Lançar consentimento MediaProjection")
             MediaProjectionData.clear()
             mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-        } catch (e: Exception) {
-            Log.e(TAG, "[$currentFlowId] Erro ao pedir captura: ${e.message}")
+        } catch (_: Exception) {
             isRequestingProjection = false
             Toast.makeText(this, "Não foi possível solicitar permissão de captura.", Toast.LENGTH_SHORT).show()
-            binding.appStatusSwitch.isChecked = false
-            persistAppActive(false)
-            updateAppStatusUI(false)
+            updatePermissionStatusUI()
         }
     }
 
-    // ---------- UI de permissões ----------
-    private fun updatePermissionStatusUI() {
-        val isAccessibilityEnabled = isAccessibilityServiceEnabled()
-        binding.accessibilityStatusTextView.text =
-            "1. Acessibilidade: ${if (isAccessibilityEnabled) "Ativo ✅" else "Inativo ❌"}"
-        binding.accessibilityStatusTextView.setTextColor(
-            ContextCompat.getColor(this, if (isAccessibilityEnabled) R.color.black else R.color.gray_inactive)
-        )
-        binding.accessibilityButton.isEnabled = !isAccessibilityEnabled
-        binding.accessibilityButton.alpha = if (isAccessibilityEnabled) 0.5f else 1.0f
-
-        val canDrawOverlays = Settings.canDrawOverlays(this)
-        binding.overlayStatusTextView.text =
-            "2. Overlay: ${if (canDrawOverlays) "Permitido ✅" else "Não Permitido ❌"}"
-        binding.overlayStatusTextView.setTextColor(
-            ContextCompat.getColor(this, if (canDrawOverlays) R.color.black else R.color.gray_inactive)
-        )
-        binding.overlayButton.isEnabled = !canDrawOverlays
-        binding.overlayButton.alpha = if (canDrawOverlays) 0.5f else 1.0f
-
-        val hasCapture = MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
-        binding.captureStatusTextView.text =
-            "3. Captura: ${if (hasCapture) "Permitida (Sessão) ✅" else "Não Permitida ❌"}"
-        binding.captureStatusTextView.setTextColor(
-            ContextCompat.getColor(this, if (hasCapture) R.color.black else R.color.gray_inactive)
-        )
-    }
+    // ---------- UI ----------
+    private fun updatePermissionStatusUI() = syncPermissionSwitches()
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         val expected = "$packageName/${SmartDriverAccessibilityService::class.java.name}"
@@ -419,15 +348,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- Serviços ----------
-    /**
-     * Arranca captura PRIMEIRO; overlay depois (só se captura ficou ativa).
-     */
     private fun startServicesIfReady(): Boolean {
-        Log.d(TAG, "startServicesIfReady")
-        if (!hasAllCorePermissions()) {
-            Log.e(TAG, "startServicesIfReady chamado sem permissões completas.")
-            return false
-        }
+        if (!hasAllCorePermissions()) return false
         val captureOk = startScreenCaptureService()
         val overlayOk = if (captureOk) startOverlayService() else false
         return overlayOk && captureOk
@@ -435,75 +357,39 @@ class MainActivity : AppCompatActivity() {
 
     private fun startScreenCaptureService(): Boolean {
         if (MediaProjectionData.resultCode != Activity.RESULT_OK || MediaProjectionData.resultData == null) {
-            Log.e(TAG, "Dados de projeção inválidos. Não iniciar ScreenCaptureService.")
             Toast.makeText(this, "Erro de permissão de captura.", Toast.LENGTH_SHORT).show()
             return false
         }
-        if (ScreenCaptureService.isRunning.get()) {
-            Log.d(TAG, "ScreenCaptureService já a correr. Atualizando saveImages.")
-            updateScreenCaptureSaveSetting(binding.saveImagesSwitch.isChecked)
-            return true
-        }
-        Log.d(TAG, "Iniciando ScreenCaptureService…")
+        if (ScreenCaptureService.isRunning.get()) return true
         val intent = Intent(this, ScreenCaptureService::class.java).apply {
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, MediaProjectionData.resultCode)
             putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, MediaProjectionData.resultData)
             putExtra(KEY_SAVE_IMAGES, binding.saveImagesSwitch.isChecked)
         }
-        return try {
-            ContextCompat.startForegroundService(this, intent)
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Falha ao iniciar ScreenCaptureService: ${e.message}", e)
-            Toast.makeText(this, "Falha a iniciar captura.", Toast.LENGTH_SHORT).show()
-            false
-        }
+        return try { ContextCompat.startForegroundService(this, intent); true }
+        catch (_: Exception) { Toast.makeText(this, "Falha a iniciar captura.", Toast.LENGTH_SHORT).show(); false }
     }
 
     private fun stopScreenCaptureService() {
         if (!ScreenCaptureService.isRunning.get()) return
-        Log.d(TAG, "Parando ScreenCaptureService…")
         val intent = Intent(this, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_STOP_CAPTURE
         }
-        try {
-            stopService(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro a parar ScreenCaptureService: ${e.message}", e)
-        }
+        try { stopService(intent) } catch (_: Exception) {}
     }
 
     private fun startOverlayService(): Boolean {
-        if (!Settings.canDrawOverlays(this)) {
-            Log.e(TAG, "Sem permissão de overlay.")
-            Toast.makeText(this, "Permissão de overlay necessária.", Toast.LENGTH_SHORT).show()
-            return false
-        }
-        if (OverlayService.isRunning.get()) {
-            Log.d(TAG, "OverlayService já a correr.")
-            return true
-        }
-        Log.d(TAG, "Iniciando OverlayService…")
+        if (!Settings.canDrawOverlays(this)) return false
+        if (OverlayService.isRunning.get()) return true
         val intent = Intent(this, OverlayService::class.java)
-        return try {
-            ContextCompat.startForegroundService(this, intent)
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Falha ao iniciar OverlayService: ${e.message}", e)
-            Toast.makeText(this, "Falha a iniciar overlay.", Toast.LENGTH_SHORT).show()
-            false
-        }
+        return try { ContextCompat.startForegroundService(this, intent); true }
+        catch (_: Exception) { Toast.makeText(this, "Falha a iniciar overlay.", Toast.LENGTH_SHORT).show(); false }
     }
 
     private fun stopOverlayService() {
         if (!OverlayService.isRunning.get()) return
-        Log.d(TAG, "Parando OverlayService…")
         val intent = Intent(this, OverlayService::class.java)
-        try {
-            stopService(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro a parar OverlayService: ${e.message}", e)
-        }
+        try { stopService(intent) } catch (_: Exception) {}
     }
 
     private fun updateScreenCaptureSaveSetting(shouldSave: Boolean) {
@@ -512,11 +398,7 @@ class MainActivity : AppCompatActivity() {
                 action = ScreenCaptureService.ACTION_UPDATE_SETTINGS
                 putExtra(KEY_SAVE_IMAGES, shouldSave)
             }
-            try {
-                startService(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao enviar UPDATE_SETTINGS: ${e.message}", e)
-            }
+            try { startService(intent) } catch (_: Exception) {}
         }
     }
 
@@ -529,14 +411,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun persistAppActive(active: Boolean) {
-        sharedPreferences.edit().putBoolean(KEY_APP_ACTIVE, active).apply()
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_APP_ACTIVE, active).apply()
     }
 
     private fun requestNeededPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
+                != PackageManager.PERMISSION_GRANTED) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }

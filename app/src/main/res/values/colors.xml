@@ -28,4 +28,21 @@
     <color name="history_indicator_medium">#FFF59D</color> <!-- Amarelo claro -->
     <color name="history_indicator_poor">#EF9A9A</color> <!-- Vermelho claro -->
     <color name="history_indicator_unknown">#E0E0E0</color> <!-- Cinza claro -->
+    <!-- Cores para Chips de estado -->
+    <color name="chip_ok_bg">#E8F5E9</color>     <!-- verde claro -->
+    <color name="chip_ok_text">#1B5E20</color>   <!-- verde escuro -->
+
+    <color name="chip_warn_bg">#FFF3E0</color>   <!-- laranja claro -->
+    <color name="chip_warn_text">#E65100</color> <!-- laranja escuro -->
+
+    <color name="chip_off_bg">#FFEBEE</color>    <!-- vermelho claro -->
+    <color name="chip_off_text">#B71C1C</color>  <!-- vermelho escuro -->
+    <!-- Switch ON (amarelo) -->
+    <color name="switch_on_thumb">#FFC107</color>   <!-- Amber 500 -->
+    <color name="switch_on_track">#FFE082</color>  <!-- Amber 200 (mais claro p/ trilho) -->
+
+    <!-- Switch OFF (cinzas) -->
+    <color name="switch_off_thumb">#BDBDBD</color> <!-- Grey 400 -->
+    <color name="switch_off_track">#E0E0E0</color> <!-- Grey 300 -->
+    
 </resources>

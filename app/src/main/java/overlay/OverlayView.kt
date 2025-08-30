@@ -151,11 +151,14 @@ class OverlayView(context: Context) : View(context) {
                 return false
             }
 
-            override fun onFling(e1: MotionEvent, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+            // >>> Assinatura corrigida: MotionEvent? (nullable)
+            override fun onFling(
+                e1: MotionEvent, e2: MotionEvent, velocityX: Float, velocityY: Float
+            ): Boolean {
                 val diffY = e2.y - e1.y
                 val diffX = e2.x - e1.x
-                if (abs(diffX) > abs(diffY)) {
-                    if (abs(diffX) > swipeMinDistancePx && abs(velocityX) > swipeThresholdVelocityPx) {
+                if (kotlin.math.abs(diffX) > kotlin.math.abs(diffY)) {
+                    if (kotlin.math.abs(diffX) > swipeMinDistancePx && kotlin.math.abs(velocityX) > swipeThresholdVelocityPx) {
                         if (diffX > 0) {
                             startTrackingMode()
                             return true
@@ -164,6 +167,7 @@ class OverlayView(context: Context) : View(context) {
                 }
                 return false
             }
+
         })
         contentDescription = "SmartDriver Overlay"
         isFocusable = false
@@ -241,7 +245,7 @@ class OverlayView(context: Context) : View(context) {
             placeholderWidth
         ) + indicatorBarMarginPx + indicatorBarWidthPx
 
-        val col2Width = max(
+        val col2Width = kotlin.math.max(
             labelTextPaint.measureText("tempo"),
             valueTextPaint.measureText("999m")
         )
@@ -254,7 +258,7 @@ class OverlayView(context: Context) : View(context) {
 
         val requiredWidth = (paddingPx * 2) + col1Width + textSpacingHorizontalPx + col2Width + textSpacingHorizontalPx + col3Width
 
-        val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight)
+        val topHighlightHeight = kotlin.math.max(highlightValueHeight, extraHighlightValueHeight)
         val firstRowHeight = labelHeight + textSpacingVerticalPx + topHighlightHeight
         val secondRowHeight = labelHeight + textSpacing_vertical_for_bottom() + valueHeight
 
@@ -278,11 +282,9 @@ class OverlayView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        // 1) Obter ratings individuais
         val kmRating   = currentEvaluationResult?.kmRating   ?: IndividualRating.UNKNOWN
         val hourRating = currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN
 
-        // 2) Calcular cor combinada localmente (regra canónica)
         val providedCombined = currentEvaluationResult?.combinedBorderRating ?: BorderRating.GRAY
         val recomputed = recomputeCombinedBorder(kmRating, hourRating)
         val finalBorder = if (providedCombined == recomputed) providedCombined else {
@@ -290,23 +292,18 @@ class OverlayView(context: Context) : View(context) {
             recomputed
         }
 
-        // Fundo + moldura
         backgroundPaint.alpha = (viewAlpha * 255).toInt()
         borderPaint.alpha = (viewAlpha * 255).toInt()
         borderPaint.color = getBorderColor(finalBorder)
         canvas.drawRoundRect(backgroundRect, borderRadiusPx, borderRadiusPx, backgroundPaint)
         canvas.drawRoundRect(borderRect, borderRadiusPx, borderRadiusPx, borderPaint)
 
-        // Banner (se existir)
         drawBannerIfNeeded(canvas)
-
-        // Conteúdo principal
         drawOfferDetailsWithIndicators(canvas)
     }
 
     private fun drawBannerIfNeeded(canvas: Canvas) {
-        val msg = bannerText ?: return
-        val text = msg.trim()
+        val text = bannerText?.trim().orEmpty()
         if (text.isEmpty()) return
 
         val textWidth = bannerTextPaint.measureText(text)
@@ -346,7 +343,6 @@ class OverlayView(context: Context) : View(context) {
         val kmRating   = currentEvaluationResult?.kmRating   ?: IndividualRating.UNKNOWN
         val hourRating = currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN
 
-        // Coordenadas
         val leftColX   = paddingPx
         val centerColX = measuredWidth / 2f
         val rightColX  = measuredWidth - paddingPx
@@ -354,7 +350,7 @@ class OverlayView(context: Context) : View(context) {
         val bannerOffsetY = if (bannerText != null)
             (bannerPadVPx * 2 + bannerTextPaint.textSize) + textSpacingVerticalPx else 0f
 
-        val topHighlightHeight = max(highlightValueHeight, extraHighlightValueHeight)
+        val topHighlightHeight = kotlin.math.max(highlightValueHeight, extraHighlightValueHeight)
         val topLabelY = paddingPx + bannerOffsetY + labelHeight - labelTextPaint.descent()
         val topValueY = topLabelY + topHighlightHeight + textSpacingVerticalPx
 
@@ -369,11 +365,11 @@ class OverlayView(context: Context) : View(context) {
             placeholderTextPaint.measureText(PLACEHOLDER_TEXT)
         )
 
-        val kmValueTextWidth = max(highlightValueTextPaint.measureText(euroPerKmStr), minTextWidthForBarSpacing)
+        val kmValueTextWidth = kotlin.math.max(highlightValueTextPaint.measureText(euroPerKmStr), minTextWidthForBarSpacing)
         val kmIndicatorLeft  = leftColX + kmValueTextWidth + indicatorBarMarginPx
         val kmIndicatorRight = kmIndicatorLeft + indicatorBarWidthPx
 
-        val hourValueTextWidth = max(extraHighlightValueTextPaint.measureText(euroPerHourStr), minTextWidthForBarSpacing)
+        val hourValueTextWidth = kotlin.math.max(extraHighlightValueTextPaint.measureText(euroPerHourStr), minTextWidthForBarSpacing)
         val hourIndicatorRight = rightColX - hourValueTextWidth - indicatorBarMarginPx
         val hourIndicatorLeft  = hourIndicatorRight - indicatorBarWidthPx
 
