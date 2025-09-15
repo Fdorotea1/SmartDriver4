@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.TextPaint
 import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -61,11 +62,11 @@ class TrackingOverlayView(
         private const val DRAG_ACTIVATION_DELAY_MS = 120L
         private const val DRAG_DISTANCE_FACTOR = 1.5f
 
-        // Pulso — intensificado
+        // Pulso
         private const val PULSE_DURATION_MS = 1800L
-        private const val PULSE_MIN_ALPHA = 120     // 0..255 (antes 60)
-        private const val PULSE_MAX_ALPHA = 255     // (antes 170)
-        private const val PULSE_EXTRA_WIDTH_FACTOR = 2.0f // (antes 1.4f)
+        private const val PULSE_MIN_ALPHA = 120
+        private const val PULSE_MAX_ALPHA = 255
+        private const val PULSE_EXTRA_WIDTH_FACTOR = 2.0f
     }
 
     // páginas: 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta
@@ -110,7 +111,7 @@ class TrackingOverlayView(
     private var initialKmRating: IndividualRating = IndividualRating.UNKNOWN
     private var initialHourRating: IndividualRating? = null
 
-    // cor/estado do halo (mantido do semáforo)
+    // cor/estado do halo
     private var initialBorderRating: BorderRating = BorderRating.GRAY
     private var currentBorderRating: BorderRating = BorderRating.GRAY
 
@@ -205,6 +206,18 @@ class TrackingOverlayView(
                 context.startService(intent)
                 return true
             }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (isDragging) return
+                cancelDragDelay()
+
+                sendOverlayServiceSimpleAction(OverlayService.ACTION_SWITCH_TO_ICON)
+                mainHandler.postDelayed({
+                    sendOverlayServiceSimpleAction(OverlayService.ACTION_SHOW_QUICK_MENU)
+                }, 60L)
+
+                try { performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) } catch (_: Throwable) {}
+            }
         })
 
         setOnTouchListener { _, event ->
@@ -290,22 +303,19 @@ class TrackingOverlayView(
         initialKmRating = iKmR
 
         initialBorderRating = cBR
-        currentBorderRating = cBR // começa com a cor do semáforo
+        currentBorderRating = cBR
         invalidate()
     }
 
-    /** Força a cor de "€/h prev." com a nota do semáforo (horária). */
     fun setInitialHourRatingFromSemaphore(r: IndividualRating) {
         initialHourRating = r
         invalidate()
     }
 
-    /** Atualiza o €/h e a classificação em tempo real (usada para a cor do “€/h atual”). */
     fun updateRealTimeData(cVph: Double?, hR: IndividualRating, elSec: Long) {
         currentValuePerHour = cVph
         currentHourRating = hR
         elapsedTimeSeconds = elSec
-        // NÃO mexemos no halo aqui (mantém-se o do semáforo).
         invalidate()
     }
 
@@ -324,7 +334,6 @@ class TrackingOverlayView(
         invalidate()
     }
 
-    /** Chamar após addView para forçar topo-direito */
     fun snapToTopRight() {
         val side = measuredWidth.coerceAtLeast(circleDiameterPx)
         val x = screenW - side - safeMarginPx
@@ -349,87 +358,89 @@ class TrackingOverlayView(
         super.onDraw(canvas)
         mainPaint.color = TEXT_COLOR_MAIN
 
-        // Cor do halo (dinâmica conforme estado combinado inicial – mantido)
         val borderColor = borderColorFor(currentBorderRating)
         borderPaint.color = borderColor
 
         val cx = width / 2f
         val cy = height / 2f
-        val radius = (min(width, height) / 2f) - borderWidthPx / 2f
+
+        // Raio base: já desconta metade do traço da moldura
+        // e leva uma folga anti-clip sub-pixel para evitar “arestas retas”.
+        val radiusBase = (min(width, height) / 2f) - borderWidthPx / 2f - 0.5f // FIX halo circular
 
         // fundo + moldura
-        canvas.drawCircle(cx, cy, radius, bgPaint)
-        canvas.drawCircle(cx, cy, radius, borderPaint)
+        canvas.drawCircle(cx, cy, radiusBase, bgPaint)
+        canvas.drawCircle(cx, cy, radiusBase, borderPaint)
 
-        // --- NOVO: anel sólido (dá mais densidade ao halo) ---
+        // anel sólido (densidade de halo) — ajusta raio para manter a circunferência exterior
+        val solidStroke = borderWidthPx * 1.25f
         val solidHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = borderWidthPx * 1.25f   // mais grosso que a moldura
+            strokeWidth = solidStroke
             color = borderColor
-            alpha = 230                            // bastante opaco
+            alpha = 230
         }
-        canvas.drawCircle(cx, cy, radius, solidHaloPaint)
-        // ------------------------------------------------------
+        val radiusSolid = radiusBase - (solidStroke - borderWidthPx) * 0.5f // FIX halo circular
+        canvas.drawCircle(cx, cy, max(0f, radiusSolid), solidHaloPaint)
 
-        // pulso suave (auréola animada)
+        // pulso suave (auréola animada) — ajusta raio conforme o stroke animado
         if (pulseEnabled) {
             val alpha = (PULSE_MIN_ALPHA + (PULSE_MAX_ALPHA - PULSE_MIN_ALPHA) * pulseProgress).toInt()
+            val pulseStroke = borderWidthPx * (1f + PULSE_EXTRA_WIDTH_FACTOR * pulseProgress)
             haloPulsePaint.color = withAlpha(borderColor, alpha)
-            haloPulsePaint.strokeWidth = borderWidthPx * (1f + PULSE_EXTRA_WIDTH_FACTOR * pulseProgress)
-            canvas.drawCircle(cx, cy, radius, haloPulsePaint)
+            haloPulsePaint.strokeWidth = pulseStroke
+
+            val radiusPulse = radiusBase - (pulseStroke - borderWidthPx) * 0.5f // FIX halo circular
+            canvas.drawCircle(cx, cy, max(0f, radiusPulse), haloPulsePaint)
         }
 
         when (pageIndex) {
-            0 -> { // Tempo: [inicial | decorrido]
+            0 -> {
                 val topLegend = "inicial"
                 val bottomLegend = "decorrido"
                 val top = initialTotalDurationMinutes?.let { formatHM(it) } ?: "--h--"
                 val bottom = formatElapsedHM(elapsedTimeSeconds)
                 drawTwoLinesWithLegends(
-                    canvas, cx, cy, radius,
+                    canvas, cx, cy, radiusBase,
                     topLegend, top, TEXT_COLOR_MAIN,
                     bottomLegend, bottom, TEXT_COLOR_MAIN
                 )
             }
-            1 -> { // €/h: [prev. | atual]
+            1 -> {
                 val topLegend = "€/h prev."
                 val bottomLegend = "€/h atual"
 
                 val prev = calcEuroPerHourPlanned().let { if (it != "--.-") "€ $it" else "€ --.-" }
                 val currVal = currentValuePerHour?.let { "€ " + dfHour1.format(it) } ?: "€ --.-"
 
-                // IMPORTANTE: a linha de cima usa o rating HORÁRIO do semáforo (se houver), fallback: cor do anel convertida
                 val baseHourRating = initialHourRating ?: borderToIndividual(initialBorderRating)
                 val prevColor = ratingToColor(baseHourRating)
-
                 val currColor = if (currentHourRating != IndividualRating.UNKNOWN)
-                    ratingToColor(currentHourRating)
-                else
-                    prevColor
+                    ratingToColor(currentHourRating) else prevColor
 
                 drawTwoLinesWithLegends(
-                    canvas, cx, cy, radius,
+                    canvas, cx, cy, radiusBase,
                     topLegend, prev, prevColor,
                     bottomLegend, currVal, currColor
                 )
             }
-            2 -> { // ESTÁTICO: €/km (cor) + km totais (preto)
+            2 -> {
                 val topLegend = "€/km"
                 val eurKm = initialValuePerKm?.let { "€ " + dfEurKm.format(it) } ?: "€ --.--"
                 val kmLegend = "km"
                 val kmShow = initialTotalDistance?.let { dfKm1.format(it) + " km" } ?: "--.- km"
                 drawTwoLinesWithLegends(
-                    canvas, cx, cy, radius,
+                    canvas, cx, cy, radiusBase,
                     topLegend, eurKm, ratingToColor(initialKmRating),
                     kmLegend, kmShow, TEXT_COLOR_MAIN
                 )
             }
-            else -> { // Oferta
+            else -> {
                 val legend = "oferta"
                 val valStr = parseOfferValue()?.let { "€ " + dfVal.format(it) }
                     ?: offerValueRaw?.let { "€ " + it.replace("€", "").trim() }
                     ?: "€ --"
-                drawSingleLineWithLegend(canvas, cx, cy, radius, legend, valStr)
+                drawSingleLineWithLegend(canvas, cx, cy, radiusBase, legend, valStr)
             }
         }
     }
@@ -467,7 +478,6 @@ class TrackingOverlayView(
         var mainSize = MAIN_TEXT_SP * resources.displayMetrics.scaledDensity
         var legSize  = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
 
-        // Base para métricas
         mainPaint.textSize = mainSize
         legendPaint.textSize = legSize
         recalcTextMetrics()
@@ -508,14 +518,12 @@ class TrackingOverlayView(
 
         var y = cy - total / 2f
 
-        // Legend topo
         if (legendTop.isNotBlank()) {
             val yLegTop = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
             canvas.drawText(legendTop, cx, yLegTop, legendPaint)
             y += legendTextHeight + gapLegend
         }
 
-        // Linha topo — PAINT dedicado
         val paintTop = TextPaint(mainPaint).apply {
             textAlign = Paint.Align.CENTER
             color = colorTop
@@ -532,7 +540,6 @@ class TrackingOverlayView(
                 y += legendTextHeight + gapLegend
             }
 
-            // Linha bottom — PAINT dedicado
             val paintBottom = TextPaint(mainPaint).apply {
                 textAlign = Paint.Align.CENTER
                 color = colorBottom

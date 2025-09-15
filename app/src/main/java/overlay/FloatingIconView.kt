@@ -10,13 +10,14 @@ import android.view.ViewOutlineProvider
 import android.view.animation.LinearInterpolator
 import androidx.appcompat.widget.AppCompatImageView
 import kotlin.math.min
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * ImageView circular com halo pulsante (verde/vermelho).
- * - O view é sempre quadrado e desenha um disco circular perfeito.
- * - A imagem é recortada em círculo.
- * - Usa setPulseColor() para alternar a cor do halo (p.ex. verde em tracking, vermelho sem tracking).
+ * FloatingIconView – Ring pulse OUTWARD (afinada)
+ * -----------------------------------------------
+ * Anel sólido que cresce de **dentro para fora**, mantendo a borda interna fixa.
+ * Cadência e gama de alpha alinhadas com a TrackingOverlayView.
  */
 class FloatingIconView @JvmOverloads constructor(
     context: Context,
@@ -24,6 +25,19 @@ class FloatingIconView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : AppCompatImageView(context, attrs, defStyleAttr) {
 
+    // === Parâmetros visuais (ajustáveis) ===
+    private val BASE_STROKE_DP = 2.0f
+    private val HALO_BASE_PAD_DP = 4f          // distância do anel ao disco
+    private val RING_MARGIN_DP = 2f            // margem aos limites do view
+    private val ANTI_CLIP_DP = 0.5f            // folga sub-pixel
+
+    private val CADENCE_MS = 1800L             // igual ao TrackingOverlayView
+    private val START_THICK_FACTOR = 0.6f      // começa 60% mais grosso que o base
+    private val EXTRA_GROWTH_FACTOR = 1.4f     // e cresce +140% ao longo do pulso (→ 3.0x total)
+    private val PULSE_ALPHA_MIN = 120          // igual ao TrackingOverlayView
+    private val PULSE_ALPHA_MAX = 255
+
+    // === Paints básicos ===
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.WHITE
@@ -33,13 +47,14 @@ class FloatingIconView @JvmOverloads constructor(
         strokeWidth = dp(1.5f)
         color = 0x22000000
     }
-    private val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
+    private val ringBasePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = dp(BASE_STROKE_DP)
         color = Color.GREEN
     }
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val ringPulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = dp(2.0f)
+        strokeWidth = dp(BASE_STROKE_DP) // dinâmico
         color = Color.GREEN
     }
 
@@ -48,24 +63,26 @@ class FloatingIconView @JvmOverloads constructor(
     private var circleCy = 0f
     private var circleR  = 0f
 
+    // Geometria e segurança
+    private val ringMargin   = dp(RING_MARGIN_DP)
+    private val antiClipPx   = dp(ANTI_CLIP_DP)
+    private val haloBasePad  = dp(HALO_BASE_PAD_DP)
+    private val baseStroke   = dp(BASE_STROKE_DP)
+
+    private var outerRMax = 0f
+
+    // Animação
     private var pulseAnimator: ValueAnimator? = null
     private var pulseProgress = 0f // 0..1
 
     private var pulseEnabled = true
     private var pulseColor: Int = Color.parseColor("#2E7D32") // default verde
 
-    // Amplitudes do halo (ajustadas para ícone maior)
-    private val ringMargin   = dp(2f)   // margem aos limites do view
-    private val haloBasePad  = dp(6f)   // “folga” além do disco
-    private val haloExtra    = dp(12f)  // expansão com a animação
-    private val haloMaxAlpha = 110
-
     init {
-        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        setLayerType(View.LAYER_TYPE_SOFTWARE, null) // strokes + animação mais estáveis
         scaleType = ScaleType.CENTER_INSIDE
         background = null
 
-        // Outline circular
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
                 val s = min(view.width, view.height)
@@ -76,10 +93,10 @@ class FloatingIconView @JvmOverloads constructor(
         }
         clipToOutline = false
 
-        // padding um pouco menor para a imagem “encher” mais
         val p = dp(6f).toInt()
         setPadding(p, p, p, p)
 
+        setPulseColor(pulseColor)
         startPulseIfNeeded()
     }
 
@@ -108,38 +125,51 @@ class FloatingIconView @JvmOverloads constructor(
         circleCx = w / 2f
         circleCy = h / 2f
 
-        // Garantir que o halo, no pico, cabe dentro do view.
-        circleR = (halfMin - ringMargin - (haloBasePad + haloExtra)).coerceAtLeast(dp(14f))
+        // Stroke máximo no pico (inicia já mais grosso e cresce mais um pouco)
+        val ringMaxStroke = baseStroke * (1f + START_THICK_FACTOR + EXTRA_GROWTH_FACTOR)
+
+        // Nada pode ultrapassar os bounds: halfMin - (margem + antiClip + stroke/2)
+        val safety = ringMargin + antiClipPx + (ringMaxStroke / 2f)
+        outerRMax = (halfMin - safety).coerceAtLeast(0f)
+
+        // Borda interna fixa: innerEdge = circleR + haloBasePad
+        // No pico: outerR = innerEdge + ringMaxStroke/2  → innerEdge <= outerRMax - ringMaxStroke/2
+        circleR = (outerRMax - haloBasePad - ringMaxStroke / 2f).coerceAtLeast(dp(14f))
 
         clipPath.reset()
         clipPath.addCircle(circleCx, circleCy, circleR, Path.Direction.CW)
-
-        updateHaloShaders()
-    }
-
-    private fun updateHaloShaders() {
-        haloPaint.color = pulseColor
-        ringPaint.color = pulseColor
-        haloPaint.maskFilter = BlurMaskFilter(dp(12f), BlurMaskFilter.Blur.NORMAL)
     }
 
     override fun onDraw(canvas: Canvas) {
-        // HALO pulsante (fora do clip, para não ser cortado)
-        if (pulseEnabled) {
-            val outerR = circleR + haloBasePad + (haloExtra * pulseProgress)
-            val alpha = (haloMaxAlpha * (1f - pulseProgress)).toInt().coerceIn(0, haloMaxAlpha)
-            haloPaint.alpha = alpha
-            canvas.drawCircle(circleCx, circleCy, outerR, haloPaint)
-
-            ringPaint.alpha = (180 * (1f - 0.6f * pulseProgress)).toInt().coerceIn(0, 180)
-            canvas.drawCircle(circleCx, circleCy, outerR, ringPaint)
-        }
-
         // Disco de fundo + borda
         canvas.drawCircle(circleCx, circleCy, circleR, bgPaint)
         canvas.drawCircle(circleCx, circleCy, circleR, borderPaint)
 
-        // Clip circular para a imagem
+        // Anel base fino (presença constante)
+        val innerEdge = circleR + haloBasePad
+        canvas.drawCircle(circleCx, circleCy, innerEdge, ringBasePaint)
+
+        // Anel pulsante (cresce para fora mantendo innerEdge fixo)
+        if (pulseEnabled) {
+            // stroke = base * (1 + START_THICK_FACTOR + EXTRA_GROWTH_FACTOR * p)
+            val stroke = baseStroke * (1f + START_THICK_FACTOR + EXTRA_GROWTH_FACTOR * pulseProgress)
+            ringPulsePaint.strokeWidth = stroke
+            ringPulsePaint.alpha = (PULSE_ALPHA_MIN + (PULSE_ALPHA_MAX - PULSE_ALPHA_MIN) * pulseProgress)
+                .toInt().coerceIn(0, 255)
+
+            // Mantém a borda interna fixa: r - stroke/2 = innerEdge
+            var pulseRadius = innerEdge + stroke * 0.5f
+
+            // Clamp exterior para não cortar
+            val maxAllowedRadius = outerRMax - stroke * 0.5f
+            if (pulseRadius > maxAllowedRadius) pulseRadius = maxAllowedRadius
+
+            if (pulseRadius > 0f) {
+                canvas.drawCircle(circleCx, circleCy, pulseRadius, ringPulsePaint)
+            }
+        }
+
+        // Clip circular para a imagem (acima do halo)
         val save = canvas.save()
         canvas.clipPath(clipPath)
         super.onDraw(canvas)
@@ -156,17 +186,28 @@ class FloatingIconView @JvmOverloads constructor(
 
     fun setPulseColor(color: Int) {
         pulseColor = color
-        updateHaloShaders()
+        ringBasePaint.color = color
+        ringPulsePaint.color = color
         invalidate()
     }
 
+    fun setPulseCadenceMs(ms: Long) {
+        val dur = ms.coerceAtLeast(400L)
+        if (pulseAnimator != null) {
+            stopPulse()
+            startPulseIfNeeded(dur)
+        } else {
+            startPulseIfNeeded(dur)
+        }
+    }
+
     // ===== animação =====
-    private fun startPulseIfNeeded() {
+    private fun startPulseIfNeeded(durationMs: Long = CADENCE_MS) {
         if (!pulseEnabled || pulseAnimator?.isRunning == true) return
         pulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 1600L
+            duration = durationMs
             repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.RESTART
+            repeatMode = ValueAnimator.REVERSE
             interpolator = LinearInterpolator()
             addUpdateListener {
                 pulseProgress = it.animatedValue as Float

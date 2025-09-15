@@ -32,7 +32,7 @@ import java.text.NumberFormat
 import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
-import kotlin.math.max
+import android.os.SystemClock
 
 // Tag de logs
 private const val TAG_HOUR = "SD.HourColor"
@@ -147,6 +147,8 @@ class OverlayService : Service() {
 
     private val shiftTimerHandler = Handler(Looper.getMainLooper())
     private var shiftTimerRunnable: Runnable? = null
+    private var uiTickerBaseMs: Long = 0L
+    private var lastDecorridoSecTick: Long = 0L
 
     private var goodHourThreshold: Double = 15.0
     private var poorHourThreshold: Double = 8.0
@@ -736,8 +738,6 @@ class OverlayService : Service() {
             getSharedPreferences(HISTORY_PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putLong(KEY_SHIFT_START_MS, 0L).apply()
 
-            decisionAvgPerHourRef = null
-            refreshTimeAvgEta()
 
             updateMenuViewShiftUI(); updateShiftNotification()
             updateShiftStateChip()
@@ -801,7 +801,7 @@ class OverlayService : Service() {
         }
 
         // Ícone flutuante (tamanho “tipo Uber/Bolt”: 88dp)
-        val ICON_DP = 88
+        val ICON_DP = 96
         floatingIconLayoutParams = WindowManager.LayoutParams(
             (ICON_DP * density).toInt(), (ICON_DP * density).toInt(),
             overlayType, commonFlags, PixelFormat.TRANSLUCENT
@@ -965,9 +965,15 @@ class OverlayService : Service() {
     // Cor do halo conforme estado
     private fun updateIconPulseColor() {
         val icon = floatingIconView ?: return
-        // Verde se tracking ativo, vermelho caso contrário
-        val color = if (tripTracker.isTracking) Color.parseColor("#2E7D32") else Color.parseColor("#C62828")
+
+        val color = when {
+            tripTracker.isTracking -> Color.parseColor("#2E7D32") // viagem ativa → verde
+            shiftSession.isActive && shiftSession.isPaused -> Color.parseColor("#FFC107") // pausa → amarelo
+            shiftSession.isActive && !shiftSession.isPaused -> Color.parseColor("#2E7D32") // sessão ativa → verde
+            else -> Color.parseColor("#C62828") // sem sessão → vermelho
+        }
         icon.setPulseColor(color)
+
     }
 
     // Alternâncias UI-only
@@ -1237,19 +1243,48 @@ class OverlayService : Service() {
         try { if (isQuickMenuAdded && quickMenuView != null) windowManager?.updateViewLayout(quickMenuView, menuLayoutParams) } catch (_: Exception) {}
     }
 
+    // 1) Ticker resiliente: re-agenda SEMPRE e só atualiza se fizer sentido
     private fun setupRunnables() { setupShiftTimerRunnable() }
+
     private fun setupShiftTimerRunnable() {
-        shiftTimerRunnable = Runnable {
-            if (shiftSession.isActive && !shiftSession.isPaused && shiftTimerRunnable != null) {
-                updateMenuViewShiftUI()
-                shiftTimerHandler.postDelayed(shiftTimerRunnable!!, 1000L)
+        shiftTimerRunnable = object : Runnable {
+            override fun run() {
+                try {
+                    if (shiftSession.isActive && !shiftSession.isPaused) {
+                        val nowSec = ((SystemClock.elapsedRealtime() - uiTickerBaseMs) / 1000L).coerceAtLeast(0L)
+                        if (nowSec != lastDecorridoSecTick) {
+                            lastDecorridoSecTick = nowSec
+                            updateMenuViewShiftUI(decorridoOverrideSec = nowSec)
+                        } else {
+                            updateShiftStateChip()
+                        }
+                    }
+                } finally {
+                    shiftTimerHandler.postDelayed(this, 1000L)
+                }
             }
         }
     }
-    private fun startShiftTimer() { shiftTimerRunnable?.let { shiftTimerHandler.removeCallbacks(it); shiftTimerHandler.post(it) } }
-    private fun stopShiftTimer() { shiftTimerRunnable?.let { shiftTimerHandler.removeCallbacks(it) } }
 
-    private fun updateMenuViewShiftUI() {
+    // Mantemos as APIs mas agora startShiftTimer lança (ou relança) o heartbeat
+    private fun startShiftTimer() {
+        val workedHms = shiftSession.getFormattedWorkedTime()
+        val workedSec = parseHmsToSeconds(workedHms) ?: 0L
+        uiTickerBaseMs = SystemClock.elapsedRealtime() - workedSec * 1000L
+        lastDecorridoSecTick = workedSec
+        if (shiftTimerRunnable == null) setupShiftTimerRunnable()
+        shiftTimerHandler.removeCallbacks(shiftTimerRunnable!!)
+        shiftTimerHandler.post(shiftTimerRunnable!!)
+    }
+
+    // stopShiftTimer deixa de matar o loop permanentemente (apenas pausa as atualizações)
+    private fun stopShiftTimer() {
+        // Opcional: manter o heartbeat e só não atualizar quando em pausa,
+        // mas se preferires mesmo parar o agendamento, descomenta a linha abaixo.
+        // shiftTimerRunnable?.let { shiftTimerHandler.removeCallbacks(it) }
+    }
+
+    private fun updateMenuViewShiftUI(decorridoOverrideSec: Long? = null) {
         quickMenuView?.let { menu ->
             val sTK = if (!shiftSession.isActive) R.string.shift_status_none
             else if (shiftSession.isPaused) R.string.shift_status_paused
@@ -1277,7 +1312,7 @@ class OverlayService : Service() {
 
         val goalNow = (goalOverrideEuro ?: seekBarGoalView?.progress ?: goalStore?.getGoalEuro() ?: 130)
         refreshGoalUI(goalNow)
-        refreshTimeAvgEta()
+        refreshTimeAvgEta(decorridoOverrideSec)
         updateShiftStateChip()
 
         if (shiftSession.isActive && !hasShownTargetReachedBanner) {
@@ -1336,7 +1371,8 @@ class OverlayService : Service() {
 
         val workedHms = shiftSession.getFormattedWorkedTime()
         val workedSec = parseHmsToSeconds(workedHms) ?: 0L
-        val refAvgPH = (decisionAvgPerHourRef ?: effectiveAvgPerHour(workedSec, currentEarnings()))
+        val earningsNow = currentEarnings()
+        val refAvgPH = (if (earningsNow <= 0.0) goodHourThreshold else effectiveAvgPerHour(workedSec, earningsNow))
         if (refAvgPH <= 0.0) return getString(R.string.expected_end_time_placeholder)
 
         val target = (goalOverrideEuro?.toDouble() ?: shiftSession.targetEarnings)
@@ -1610,17 +1646,17 @@ class OverlayService : Service() {
         }
     }
 
-    private fun refreshTimeAvgEta() {
+    private fun refreshTimeAvgEta(decorridoOverrideSec: Long? = null) {
         val donutTime = donutTimeView ?: return
         val donutAvg  = donutAverageView ?: return
         val donutEta  = donutEtaView ?: return
 
         val workedHmsFromUi = tvShiftTimerView?.text?.toString().orEmpty()
         val workedHms = if (workedHmsFromUi.isNotBlank()) workedHmsFromUi else shiftSession.getFormattedWorkedTime()
-        val decorrido = parseHmsToSeconds(workedHms) ?: 0L
+        val decorrido = decorridoOverrideSec ?: (parseHmsToSeconds(workedHms) ?: 0L)
 
         val earnings = currentEarnings().coerceAtLeast(0.0)
-        val avgPHRef = ((decisionAvgPerHourRef) ?: effectiveAvgPerHour(decorrido, earnings)).coerceAtLeast(0.0)
+        val avgPHRef = (if (earnings <= 0.0) goodHourThreshold else effectiveAvgPerHour(decorrido, earnings)).coerceAtLeast(0.0)
 
         val goalF = (goalOverrideEuro?.toDouble() ?: goalStore?.getGoalEuro()?.toDouble()
         ?: shiftSession.targetEarnings).coerceAtLeast(0.0)
@@ -1698,11 +1734,10 @@ class OverlayService : Service() {
     }
 
     /** Recalcula snapshot do donut €/h e refresca UI/notificação, com base em ganhos visíveis. */
-    private var decisionAvgPerHourRef: Double? = null
     private fun recalcAvgAfterHistoryChange() {
         val workedHms = shiftSession.getFormattedWorkedTime()
         val workedSec = parseHmsToSeconds(workedHms) ?: 0L
-        decisionAvgPerHourRef = effectiveAvgPerHour(workedSec, currentEarnings())
+        goodHourThreshold = effectiveAvgPerHour(workedSec, currentEarnings())
 
         refreshTimeAvgEta()
         updateMenuViewShiftUI()
