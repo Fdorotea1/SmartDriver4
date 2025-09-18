@@ -40,6 +40,84 @@ private const val TAG_HEALTH = "SD.Health"
 
 class OverlayService : Service() {
 
+    // ===== Helpers de clamp seguros (evitam ranges invertidos em foldables) =====
+    private fun clampInt(value: Int, a: Int, b: Int): Int {
+        val min = kotlin.math.min(a, b)
+        val max = kotlin.math.max(a, b)
+        return if (min == max) min else value.coerceIn(min, max)
+    }
+    private fun clampFloat(value: Float, a: Float, b: Float): Float {
+        val min = kotlin.math.min(a, b)
+        val max = kotlin.math.max(a, b)
+        return if (min == max) min else value.coerceIn(min, max)
+    }
+
+    // ===== Receiver para mudanças de configuração (fold/unfold, rotação, multi‑janela) =====
+    private val configChangeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (Intent.ACTION_CONFIGURATION_CHANGED == intent?.action) {
+                try {
+                    onConfigChangedReposition()
+                } catch (t: Throwable) {
+                    Log.w(TAG_HEALTH, "onConfigChangedReposition() falhou: ${t.message}", t)
+                }
+            }
+        }
+    }
+
+    /**
+     * Recalcula métricas de ecrã e re‑aperta (clamp) todas as overlays às novas dimensões,
+     * evitando IllegalArgumentException: coerceIn com max < min.
+     */
+    private fun onConfigChangedReposition() {
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+
+        // Floating icon
+        floatingIconLayoutParams?.let { lp ->
+            val nx = clampInt(lp.x, 0, screenW - kotlin.math.max(1, lp.width))
+            val ny = clampInt(lp.y, 0, screenH - kotlin.math.max(1, lp.height))
+            if (nx != lp.x || ny != lp.y) {
+                lp.x = nx; lp.y = ny
+                try { windowManager?.updateViewLayout(floatingIconView, lp) } catch (_: Throwable) {}
+            }
+        }
+
+        // Quick menu
+        menuLayoutParams?.let { lp ->
+            val menuW = if (lp.width > 0) lp.width else (360 * dm.density).toInt()
+            val margin = (12 * dm.density).toInt()
+            val nx = clampInt(lp.x, margin, screenW - margin - menuW)
+            val ny = clampInt(lp.y, margin, screenH - margin - kotlin.math.max(1, lp.height))
+            if (nx != lp.x || ny != lp.y) {
+                lp.x = nx; lp.y = ny
+                try { if (isQuickMenuAdded) windowManager?.updateViewLayout(quickMenuView, lp) } catch (_: Throwable) {}
+            }
+        }
+
+        // Tracking overlay (bolha)
+        trackingLayoutParams?.let { lp ->
+            val nx = clampInt(lp.x, 0, screenW - kotlin.math.max(1, lp.width))
+            val ny = clampInt(lp.y, 0, screenH - kotlin.math.max(1, lp.height))
+            if (nx != lp.x || ny != lp.y) {
+                lp.x = nx; lp.y = ny
+                try { if (isTrackingOverlayAdded) windowManager?.updateViewLayout(trackingOverlayView, lp) } catch (_: Throwable) {}
+            }
+        }
+
+        // Drop zone (se existir)
+        dropZoneLayoutParams?.let { lp ->
+            val nx = clampInt(lp.x, 0, screenW - kotlin.math.max(1, lp.width))
+            val ny = clampInt(lp.y, 0, screenH - kotlin.math.max(1, lp.height))
+            if (nx != lp.x || ny != lp.y) {
+                lp.x = nx; lp.y = ny
+                try { if (dropZoneView != null) windowManager?.updateViewLayout(dropZoneView, lp) } catch (_: Throwable) {}
+            }
+        }
+    }
+
+
     companion object {
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "overlay_service_channel"
@@ -102,6 +180,8 @@ class OverlayService : Service() {
         const val ACTION_EVT_TRACKING_ENDED   = "com.example.smartdriver.EVT_TRACKING_ENDED"
         const val ACTION_EVT_MAIN_OVERLAY_SHOWN = "com.example.smartdriver.EVT_MAIN_OVERLAY_SHOWN"
         const val EXTRA_OFFER_SIGNATURE = "extra_offer_signature"
+        // NOVO: tripId para associar screenshots ao histórico
+        const val EXTRA_TRIP_ID = "extra_trip_id"
 
         // Arranque de tracking a partir do último semáforo mostrado
         const val ACTION_START_TRACKING_FROM_LAST = "com.example.smartdriver.overlay.START_TRACKING_FROM_LAST"
@@ -249,6 +329,9 @@ class OverlayService : Service() {
         get() = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     // ----------------------------------------------------
 
+    // ===== NOVO: tripId da sessão de tracking =====
+    @Volatile private var currentTripId: String? = null
+
     override fun onCreate() {
         super.onCreate()
         isRunning.set(true)
@@ -339,8 +422,9 @@ class OverlayService : Service() {
                     OverlayView.BannerType.SUCCESS,
                     2500
                 )
-                sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED).apply { /* compat */ })
+                // FIM de viagem → apenas ENDED
                 sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
+                currentTripId = null
             }
             override fun onTripDiscarded() {
                 OfferManager.getInstance(applicationContext).setTrackingActive(false)
@@ -360,6 +444,7 @@ class OverlayService : Service() {
                 Toast.makeText(this@OverlayService, getString(R.string.toast_tracking_discarded), Toast.LENGTH_SHORT).show()
                 showOverlayBanner("Viagem descartada", OverlayView.BannerType.WARNING, 2000)
                 sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
+                currentTripId = null
             }
         })
     }
@@ -458,6 +543,14 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+
+// Unregister config receiver
+        try {
+            unregisterReceiver(configChangeReceiver)
+        } catch (_: Throwable) {
+        }
+
+
         super.onDestroy()
         if (tripTracker.isTracking) tripTracker.discard()
         shiftSession.onServiceDestroyed()
@@ -515,7 +608,12 @@ class OverlayService : Service() {
         updateShiftNotification()
         updateIconPulseColor()
         showOverlayBanner("Tracking iniciado", OverlayView.BannerType.INFO, 1200)
-        sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED))
+
+        // === NOVO: gerar tripId e enviar no STARTED ===
+        if (currentTripId == null) currentTripId = UUID.randomUUID().toString()
+        sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED).apply {
+            putExtra(EXTRA_TRIP_ID, currentTripId)
+        })
 
         updateFinishPromptForState(edgeOnly = false)
 
@@ -564,7 +662,12 @@ class OverlayService : Service() {
             updateShiftNotification()
             updateIconPulseColor()
             showOverlayBanner("Tracking iniciado", OverlayView.BannerType.INFO, 1500)
-            sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED))
+
+            // === NOVO: gerar tripId e enviar no STARTED ===
+            if (currentTripId == null) currentTripId = UUID.randomUUID().toString()
+            sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED).apply {
+                putExtra(EXTRA_TRIP_ID, currentTripId)
+            })
 
             updateFinishPromptForState(edgeOnly = false)
             startShiftTimer()
@@ -585,6 +688,7 @@ class OverlayService : Service() {
         hideFinishConfirmPrompt()
         updateIconPulseColor()
         sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
+        currentTripId = null
     }
 
     private fun handleDiscardCurrentTracking() {
@@ -599,6 +703,7 @@ class OverlayService : Service() {
         showFloatingIconAt(tx, ty)
         updateIconPulseColor()
         sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
+        currentTripId = null
     }
 
     private fun handleHideOverlay() {
@@ -608,6 +713,7 @@ class OverlayService : Service() {
         updateShiftNotification()
         updateIconPulseColor()
         sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
+        currentTripId = null
     }
 
     private fun handleShowOverlay(intent: Intent?) {
@@ -1032,7 +1138,7 @@ class OverlayService : Service() {
         val estH = (320 * density).toInt() // estimativa inicial antes de medir
 
         // X centrado; Y fixo em baixo (com margem)
-        val x = ((screenW - menuW) / 2).coerceIn(margin, screenW - margin - menuW)
+        val x = clampInt((screenW - menuW) / 2, margin, screenW - margin - menuW)
         val y = (screenH - estH - margin).coerceAtLeast(margin)
 
         menuLayoutParams.x = x
@@ -1102,8 +1208,8 @@ class OverlayService : Service() {
                     if (isDrag) {
                         val screenW = resources.displayMetrics.widthPixels
                         val screenH = resources.displayMetrics.heightPixels
-                        val newX = (startX + dX.toInt()).coerceIn(0, screenW - v.width)
-                        val newY = (startY + dY.toInt()).coerceIn(0, screenH - v.height)
+                        val newX = clampInt(startX + dX.toInt(), 0, screenW - v.width)
+                        val newY = clampInt(startY + dY.toInt(), 0, screenH - v.height)
                         if (newX != floatingIconLayoutParams.x || newY != floatingIconLayoutParams.y) {
                             floatingIconLayoutParams.x = newX
                             floatingIconLayoutParams.y = newY
@@ -1208,6 +1314,7 @@ class OverlayService : Service() {
                 updateIconPulseColor()
 
                 sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
+                currentTripId = null
                 return
             }
         }
@@ -1688,7 +1795,7 @@ class OverlayService : Service() {
             maximumFractionDigits = 1
             minimumFractionDigits = 0
         }
-        donutAvg.setCenterText("${nf.format(avgCurrent)}€", if (avgTarget > 0f) "alvo ${nf.format(avgTarget)}€" else "—")
+        donutAvg.setCenterText("${nf.format(avgCurrent)}€", "Alvo " + nf.format(goodHourThreshold) + "€/h")
         donutAvg.setProgress(ratio.coerceIn(0f, 1f))
         donutAvg.setHaloExcess(if (ratio > 1f) (ratio - 1f).coerceAtMost(1f) else 0f)
 
@@ -1737,7 +1844,6 @@ class OverlayService : Service() {
     private fun recalcAvgAfterHistoryChange() {
         val workedHms = shiftSession.getFormattedWorkedTime()
         val workedSec = parseHmsToSeconds(workedHms) ?: 0L
-        goodHourThreshold = effectiveAvgPerHour(workedSec, currentEarnings())
 
         refreshTimeAvgEta()
         updateMenuViewShiftUI()

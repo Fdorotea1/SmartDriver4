@@ -3,12 +3,16 @@ package com.example.smartdriver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -18,6 +22,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.smartdriver.databinding.ActivityHistoryBinding
 import com.example.smartdriver.overlay.OverlayService
 import com.example.smartdriver.utils.TripHistoryEntry
+import com.example.smartdriver.utils.TripScreenshotIndex
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.google.gson.reflect.TypeToken
@@ -123,49 +128,60 @@ class HistoryActivity : AppCompatActivity() {
         }
         container.addView(etDur)
 
-        AlertDialog.Builder(this)
+        // Ver se há screenshot próxima do início da viagem
+        val nearestShotPath = TripScreenshotIndex.findNearestForStart(this, entry.startTimeMillis, 15_000L)
+
+        val builder = AlertDialog.Builder(this)
             .setTitle("Editar registo (valor, kms e tempo)")
             .setView(container)
-            .setPositiveButton("Guardar") { dialog, _ ->
-                // Valor (€)
-                val newEff = etValor.text?.toString()
-                    ?.replace(",", ".")
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?.toDoubleOrNull()
-                    ?.takeIf { it >= 0.0 }
-
-                // Distância (km)
-                val newKm = etKm.text?.toString()
-                    ?.replace(",", ".")
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?.toDoubleOrNull()
-                    ?.takeIf { it >= 0.0 }
-
-                // Duração (segundos)
-                val newDurSec = etDur.text?.toString()
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?.let { parseDurationFlexible(it) }
-
-                if (etDur.text?.isNotEmpty() == true && newDurSec == null) {
-                    Toast.makeText(this, "Duração inválida. Use mm:ss (ex.: 12:30).", Toast.LENGTH_LONG).show()
-                    dialog.dismiss()
-                    return@setPositiveButton
-                }
-
-                if (newEff == null && newKm == null && newDurSec == null) {
-                    Toast.makeText(this, "Nada para atualizar.", Toast.LENGTH_SHORT).show()
-                    dialog.dismiss()
-                    return@setPositiveButton
-                }
-
-                applyEditToHistory(entry, position, newEff, newKm, newDurSec)
-                dialog.dismiss()
-            }
             .setNegativeButton("Cancelar", null)
-            .show()
+
+        if (nearestShotPath != null) {
+            builder.setNeutralButton("Ver screenshot") { _, _ ->
+                showScreenshotPreview(nearestShotPath)
+            }
+        }
+
+        builder.setPositiveButton("Guardar") { dialog, _ ->
+            // Valor (€)
+            val newEff = etValor.text?.toString()
+                ?.replace(",", ".")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.toDoubleOrNull()
+                ?.takeIf { it >= 0.0 }
+
+            // Distância (km)
+            val newKm = etKm.text?.toString()
+                ?.replace(",", ".")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.toDoubleOrNull()
+                ?.takeIf { it >= 0.0 }
+
+            // Duração (segundos)
+            val newDurSec = etDur.text?.toString()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { parseDurationFlexible(it) }
+
+            if (etDur.text?.isNotEmpty() == true && newDurSec == null) {
+                Toast.makeText(this, "Duração inválida. Use mm:ss (ex.: 12:30).", Toast.LENGTH_LONG).show()
+                dialog.dismiss()
+                return@setPositiveButton
+            }
+
+            if (newEff == null && newKm == null && newDurSec == null) {
+                Toast.makeText(this, "Nada para atualizar.", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+                return@setPositiveButton
+            }
+
+            applyEditToHistory(entry, position, newEff, newKm, newDurSec)
+            dialog.dismiss()
+        }
+
+        builder.show()
     }
 
     private fun makeLabel(text: String): TextView =
@@ -398,5 +414,70 @@ class HistoryActivity : AppCompatActivity() {
             if (num < 0) return null
             if (num <= 600) num * 60 else num
         }
+    }
+
+    /** Preview da screenshot com OCR congelado enquanto o diálogo estiver aberto. */
+    private fun showScreenshotPreview(path: String) {
+        // 1) prepara pulsos de FREEZE para o ScreenCaptureService (900 ms cada)
+        val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            action = ScreenCaptureService.ACTION_FREEZE_OCR
+        }
+        val handler = Handler(Looper.getMainLooper())
+        var keepFreezing = true
+        val freezeTick = object : Runnable {
+            override fun run() {
+                try { startService(serviceIntent) } catch (_: Exception) {}
+                if (keepFreezing) handler.postDelayed(this, 600L) // reenviar antes dos 900 ms expirarem
+            }
+        }
+
+        // 2) cria a ImageView (carregando redimensionado para não matar memória)
+        val iv = ImageView(this).apply {
+            adjustViewBounds = true
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+
+            // medir
+            val opts = BitmapFactory.Options().apply {
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                inDither = true
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeFile(path, opts)
+
+            val maxW = resources.displayMetrics.widthPixels * 9 / 10
+            val maxH = resources.displayMetrics.heightPixels * 8 / 10
+            var sample = 1
+            while (opts.outWidth / sample > maxW || opts.outHeight / sample > maxH) {
+                sample *= 2
+            }
+
+            // carregar redimensionado
+            val opts2 = BitmapFactory.Options().apply {
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                inDither = true
+                inSampleSize = sample
+            }
+            val bmp = BitmapFactory.decodeFile(path, opts2)
+            setImageBitmap(bmp)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+
+        // 3) mostra o diálogo e mantém FREEZE até fechar
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Screenshot da oferta")
+            .setView(iv)
+            .setPositiveButton("Fechar", null)
+            .create()
+
+        dlg.setOnShowListener {
+            keepFreezing = true
+            handler.post(freezeTick)           // começa a congelar já
+        }
+        dlg.setOnDismissListener {
+            keepFreezing = false               // pára de congelar
+            handler.removeCallbacks(freezeTick)
+        }
+
+        dlg.show()
     }
 }

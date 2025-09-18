@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    package="com.example.smartdriver"> <!-- Verifique o seu package -->
+    package="com.example.smartdriver">
 
     <!-- Permissões Essenciais -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" /> <!-- Overlay -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" /> <!-- Notificações (Android 13+) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
 
     <!-- Permissões de Armazenamento (Opcional/Legado) -->
@@ -25,13 +25,14 @@
         android:theme="@style/Theme.SmartDriver"
         tools:targetApi="31">
 
-        <!-- Atividades... -->
-
+        <!-- Diálogo/meta -->
         <activity
             android:name=".SetShiftTargetActivity"
             android:exported="false"
             android:theme="@style/Theme.SmartDriver.TransparentDialog"
             android:launchMode="singleTop" />
+
+        <!-- Splash -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
@@ -42,50 +43,53 @@
             </intent-filter>
         </activity>
 
+        <!-- MAIN com barra preta -->
         <activity
             android:name=".MainActivity"
             android:exported="false"
-            android:launchMode="singleTop"/>
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.SmartDriver.BlackBar" />
 
+        <!-- SETTINGS com barra preta -->
         <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:label="@string/settings_title"
-        android:parentActivityName=".MainActivity">
-        <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity" />
-    </activity>
+            android:parentActivityName=".MainActivity"
+            android:theme="@style/Theme.SmartDriver.BlackBar">
+            <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity" />
+        </activity>
 
-    <activity
-        android:name=".HistoryActivity"
-        android:exported="false"
-        android:label="Histórico"
-    android:parentActivityName=".MainActivity">
-    <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity" />
-</activity>
+        <!-- Histórico -->
+        <activity
+            android:name=".HistoryActivity"
+            android:exported="false"
+            android:label="Histórico"
+            android:parentActivityName=".MainActivity">
+            <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity" />
+        </activity>
 
-    <!-- Serviços -->
-<service
-android:name=".SmartDriverAccessibilityService"
-android:exported="false"
-android:label="SmartDriver Service"
-    android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-<intent-filter>
-<action android:name="android.accessibilityservice.AccessibilityService" />
-</intent-filter>
-<meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />
-    </service>
-<service
-android:name=".ScreenCaptureService"
-android:enabled="true"
-android:exported="false"
-android:foregroundServiceType="mediaProjection" />
+        <!-- Serviços -->
+        <service
+            android:name=".SmartDriverAccessibilityService"
+            android:exported="false"
+            android:label="SmartDriver Service"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />
+        </service>
 
-<service
-android:name=".overlay.OverlayService"
-android:enabled="true"
-android:exported="false">
-</service>
+        <service
+            android:name=".ScreenCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
+        <service
+            android:name=".overlay.OverlayService"
+            android:enabled="true"
+            android:exported="false" />
     </application>
-
-    </manifest>
+</manifest>

@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.example.smartdriver.utils.BorderRating
 import com.example.smartdriver.utils.TripHistoryEntry
+import com.example.smartdriver.utils.TripScreenshotIndex
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -63,8 +64,11 @@ class HistoryAdapter(
     override fun onBindViewHolder(holder: HistoryViewHolder, position: Int) {
         val entry = historyList[position]
 
-        holder.startTimeTextView.text =
-            "Início: ${dateTimeFormatter.format(Date(entry.startTimeMillis))}"
+        // Indicador de screenshot próximo do início da viagem (±15 s)
+        val hasShot = TripScreenshotIndex.hasNear(holder.itemView.context, entry.startTimeMillis, 15_000L)
+        val startTxt = "Início: ${dateTimeFormatter.format(Date(entry.startTimeMillis))}" +
+                if (hasShot) "  📷" else ""
+        holder.startTimeTextView.text = startTxt
 
         val durationMinutes = TimeUnit.SECONDS.toMinutes(entry.durationSeconds)
         val durationSecondsPart = entry.durationSeconds % 60
@@ -85,7 +89,6 @@ class HistoryAdapter(
         holder.initialVpkTextView.text =
             "€/km Ini: ${entry.initialVpk?.let { String.format(Locale.US, "%.2f", it) } ?: placeholder}"
 
-        // O campo pode ter sido editado; apresentamos simplesmente "Dist" para não confundir
         holder.initialDistanceTextView.text =
             "Dist: ${entry.initialDistanceKm?.let { String.format(Locale.US, "%.2f km", it) } ?: placeholder}"
 

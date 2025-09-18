@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Cores Base (Exemplos, mantenha as suas) -->
+    <!-- As tuas cores existentes -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
@@ -9,40 +9,42 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="gray_inactive">#888888</color>
-    <color name="splash_background">#FFFFFF</color> <!-- Exemplo -->
+    <color name="splash_background">#FFFFFF</color>
 
-    <!-- *** NOVAS CORES PARA BOTÕES DE TURNO *** -->
-    <color name="button_start">#4CAF50</color> <!-- Verde -->
-    <color name="button_pause">#FF9800</color> <!-- Laranja -->
-    <color name="button_resume">#2196F3</color> <!-- Azul -->
-    <color name="button_end">#F44336</color>   <!-- Vermelho -->
+    <!-- Botões de turno -->
+    <color name="button_start">#4CAF50</color>
+    <color name="button_pause">#FF9800</color>
+    <color name="button_resume">#2196F3</color>
+    <color name="button_end">#F44336</color>
 
-    <!-- Cores da Avaliação (Exemplos, ajuste se necessário) -->
-    <color name="rating_good">#4CAF50</color> <!-- Verde -->
-    <color name="rating_medium">#FFC107</color> <!-- Amarelo/Laranja -->
-    <color name="rating_poor">#F44336</color> <!-- Vermelho -->
-    <color name="rating_unknown">#9E9E9E</color> <!-- Cinza -->
-    <color name="gray_divider">#BDBDBD</color> <!-- Cinza médio, ajuste o HEX se desejar -->
-    <!-- *** NOVAS CORES PARA INDICADOR DO HISTÓRICO *** -->
-    <color name="history_indicator_good">#A5D6A7</color> <!-- Verde claro -->
-    <color name="history_indicator_medium">#FFF59D</color> <!-- Amarelo claro -->
-    <color name="history_indicator_poor">#EF9A9A</color> <!-- Vermelho claro -->
-    <color name="history_indicator_unknown">#E0E0E0</color> <!-- Cinza claro -->
-    <!-- Cores para Chips de estado -->
-    <color name="chip_ok_bg">#E8F5E9</color>     <!-- verde claro -->
-    <color name="chip_ok_text">#1B5E20</color>   <!-- verde escuro -->
+    <!-- Avaliação -->
+    <color name="rating_good">#4CAF50</color>
+    <color name="rating_medium">#FFC107</color>
+    <color name="rating_poor">#F44336</color>
+    <color name="rating_unknown">#9E9E9E</color>
+    <color name="gray_divider">#BDBDBD</color>
 
-    <color name="chip_warn_bg">#FFF3E0</color>   <!-- laranja claro -->
-    <color name="chip_warn_text">#E65100</color> <!-- laranja escuro -->
+    <!-- Histórico -->
+    <color name="history_indicator_good">#A5D6A7</color>
+    <color name="history_indicator_medium">#FFF59D</color>
+    <color name="history_indicator_poor">#EF9A9A</color>
+    <color name="history_indicator_unknown">#E0E0E0</color>
 
-    <color name="chip_off_bg">#FFEBEE</color>    <!-- vermelho claro -->
-    <color name="chip_off_text">#B71C1C</color>  <!-- vermelho escuro -->
-    <!-- Switch ON (amarelo) -->
-    <color name="switch_on_thumb">#FFC107</color>   <!-- Amber 500 -->
-    <color name="switch_on_track">#FFE082</color>  <!-- Amber 200 (mais claro p/ trilho) -->
+    <!-- Chips -->
+    <color name="chip_ok_bg">#E8F5E9</color>
+    <color name="chip_ok_text">#1B5E20</color>
+    <color name="chip_warn_bg">#FFF3E0</color>
+    <color name="chip_warn_text">#E65100</color>
+    <color name="chip_off_bg">#FFEBEE</color>
+    <color name="chip_off_text">#B71C1C</color>
 
-    <!-- Switch OFF (cinzas) -->
-    <color name="switch_off_thumb">#BDBDBD</color> <!-- Grey 400 -->
-    <color name="switch_off_track">#E0E0E0</color> <!-- Grey 300 -->
-    
+    <!-- Switch -->
+    <color name="switch_on_thumb">#FFC107</color>
+    <color name="switch_on_track">#FFE082</color>
+    <color name="switch_off_thumb">#BDBDBD</color>
+    <color name="switch_off_track">#E0E0E0</color>
+
+    <!-- NOVAS cores sem conflitar com as genéricas -->
+    <color name="sd_black">#000000</color>
+    <color name="sd_white">#FFFFFF</color>
 </resources>

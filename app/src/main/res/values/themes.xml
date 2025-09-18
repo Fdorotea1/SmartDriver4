@@ -1,53 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Tema base da aplicação (modo diurno/light) -->
+
+    <!-- Tema base da aplicação (mantém) -->
     <style name="Theme.SmartDriver" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
-        <!-- Cores primárias (ActionBar, etc.) -->
+        <!-- Primárias atuais -->
         <item name="colorPrimary">@color/purple_500</item>
         <item name="colorPrimaryVariant">@color/purple_700</item>
         <item name="colorOnPrimary">@color/white</item>
-        <!-- Cores secundárias (Widgets como FloatingActionButton) -->
+
+        <!-- Secundárias atuais -->
         <item name="colorSecondary">@color/teal_200</item>
         <item name="colorSecondaryVariant">@color/teal_700</item>
         <item name="colorOnSecondary">@color/black</item>
-        <!-- Cor da barra de status -->
+
+        <!-- Status bar: por defeito usa Variant -->
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
 
-        <!-- === PERSONALIZAÇÕES DE COR SOLICITADAS === -->
+        <!-- Personalizações várias já existentes -->
         <item name="android:windowBackground">@color/white</item>
         <item name="android:colorBackground">@color/white</item>
         <item name="android:textColor">@color/black</item>
         <item name="android:textColorHint">@color/gray_inactive</item>
         <item name="android:textColorSecondary">@color/gray_inactive</item>
         <item name="android:listDivider">@color/gray_divider</item>
-        <!-- Adiciona colorError aqui para que ?attr/colorError funcione -->
-        <item name="colorError">@color/button_end</item> <!-- Exemplo: usando a cor do botão "End" para erros -->
+        <item name="colorError">@color/button_end</item>
     </style>
 
-    <!-- Tema para a Splash Screen (sem ActionBar e fundo branco) -->
+    <!-- Splash sem ActionBar -->
     <style name="Theme.SmartDriver.Splash" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:windowBackground">@color/white</item>
-        <!-- Opcional: Garante que a status bar também combine, se necessário -->
-        <!-- <item name="android:statusBarColor">@color/white</item> -->
-        <!-- <item name="android:windowLightStatusBar" tools:targetApi="m">true</item> -->
+        <!-- Ex.: <item name="android:statusBarColor">@color/white</item> -->
     </style>
 
-    <!-- Tema para o Diálogo Transparente da Meta -->
-    <style name="Theme.SmartDriver.TransparentDialog" parent="Theme.AppCompat.Dialog"> <!-- Ou Theme.MaterialComponents.Dialog -->
+    <!-- Diálogo transparente -->
+    <style name="Theme.SmartDriver.TransparentDialog" parent="Theme.AppCompat.Dialog">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowIsFloating">true</item>
-        <item name="android:backgroundDimEnabled">true</item> <!-- Escurece o fundo -->
+        <item name="android:backgroundDimEnabled">true</item>
     </style>
 
-
-    <!-- Estilos padrão do Android Studio (geralmente para ActionBar) -->
+    <!-- Helpers gerados pelo template -->
     <style name="Theme.SmartDriver.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
     </style>
     <style name="Theme.SmartDriver.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar" />
     <style name="Theme.SmartDriver.PopupOverlay" parent="ThemeOverlay.AppCompat.Light" />
+
+    <!-- =================== NOVO: Tema com barras PRETAS =================== -->
+    <style name="Theme.SmartDriver.BlackBar" parent="Theme.SmartDriver">
+        <!-- ActionBar preta com texto/ícones brancos -->
+        <item name="actionBarStyle">@style/SmartActionBar.Black</item>
+        <!-- Para Toolbars Material (se presentes) -->
+        <item name="colorPrimary">@color/sd_black</item>
+        <item name="colorOnPrimary">@color/sd_white</item>
+
+        <!-- StatusBar e Navigation bar pretas com ícones claros -->
+        <item name="android:statusBarColor">@color/sd_black</item>
+        <item name="android:navigationBarColor">@color/sd_black</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- (Opcional) <item name="android:windowLightNavigationBar">false</item> -->
+    </style>
+
+    <!-- ActionBar preta -->
+    <style name="SmartActionBar.Black" parent="@style/Widget.AppCompat.Light.ActionBar.Solid.Inverse">
+        <item name="background">@color/sd_black</item>
+        <item name="titleTextStyle">@style/SmartActionBarTitle.White</item>
+        <item name="subtitleTextStyle">@style/SmartActionBarSubtitle.White</item>
+    </style>
+
+    <style name="SmartActionBarTitle.White" parent="@style/TextAppearance.AppCompat.Widget.ActionBar.Title">
+        <item name="android:textColor">@color/sd_white</item>
+    </style>
+
+    <style name="SmartActionBarSubtitle.White" parent="@style/TextAppearance.AppCompat.Widget.ActionBar.Subtitle">
+        <item name="android:textColor">@color/sd_white</item>
+    </style>
 
 </resources>
