@@ -418,16 +418,25 @@ class HistoryActivity : AppCompatActivity() {
 
     /** Preview da screenshot com OCR congelado enquanto o diálogo estiver aberto. */
     private fun showScreenshotPreview(path: String) {
+        // 0) valida caminho
+        if (path.isBlank()) {
+            Toast.makeText(this, "Screenshot indisponível.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         // 1) prepara pulsos de FREEZE para o ScreenCaptureService (900 ms cada)
-        val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+        val freezeIntent = Intent(this, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_FREEZE_OCR
+        }
+        val resumeIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            action = ScreenCaptureService.ACTION_RESUME_AFTER_PREVIEW
         }
         val handler = Handler(Looper.getMainLooper())
         var keepFreezing = true
         val freezeTick = object : Runnable {
             override fun run() {
-                try { startService(serviceIntent) } catch (_: Exception) {}
-                if (keepFreezing) handler.postDelayed(this, 600L) // reenviar antes dos 900 ms expirarem
+                try { startService(freezeIntent) } catch (_: Exception) {}
+                if (keepFreezing) handler.postDelayed(this, 600L) // renova antes dos 900 ms expirarem
             }
         }
 
@@ -457,12 +466,16 @@ class HistoryActivity : AppCompatActivity() {
                 inDither = true
                 inSampleSize = sample
             }
-            val bmp = BitmapFactory.decodeFile(path, opts2)
-            setImageBitmap(bmp)
-            scaleType = ImageView.ScaleType.FIT_CENTER
+            val bmp = try { BitmapFactory.decodeFile(path, opts2) } catch (_: Exception) { null }
+            if (bmp == null) {
+                Toast.makeText(context, "Falha ao abrir screenshot.", Toast.LENGTH_SHORT).show()
+            } else {
+                setImageBitmap(bmp)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }
         }
 
-        // 3) mostra o diálogo e mantém FREEZE até fechar
+        // 3) mostra o diálogo e mantém FREEZE até fechar; no fechar envia RESUME
         val dlg = AlertDialog.Builder(this)
             .setTitle("Screenshot da oferta")
             .setView(iv)
@@ -474,8 +487,10 @@ class HistoryActivity : AppCompatActivity() {
             handler.post(freezeTick)           // começa a congelar já
         }
         dlg.setOnDismissListener {
-            keepFreezing = false               // pára de congelar
+            keepFreezing = false               // pára de renovar FREEZE
             handler.removeCallbacks(freezeTick)
+            // retoma explicitamente o OCR/captura
+            try { startService(resumeIntent) } catch (_: Exception) {}
         }
 
         dlg.show()
