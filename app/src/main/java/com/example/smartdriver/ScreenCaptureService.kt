@@ -29,16 +29,14 @@ import com.example.smartdriver.overlay.OverlayService
 import com.example.smartdriver.utils.ImageAnalysisUtils
 import com.example.smartdriver.utils.OfferData
 import com.example.smartdriver.utils.OcrTextRecognizer
+import com.example.smartdriver.utils.TripMediaStorage
+import com.example.smartdriver.utils.TripScreenshotIndex
 import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
-
-// NOVO: usar storage/index privados por viagem
-import com.example.smartdriver.utils.TripMediaStorage
-import com.example.smartdriver.utils.TripScreenshotIndex
 
 class ScreenCaptureService : Service() {
 
@@ -52,7 +50,11 @@ class ScreenCaptureService : Service() {
         const val ACTION_CAPTURE_NOW = "com.example.smartdriver.screen_capture.CAPTURE_NOW"
         const val ACTION_UPDATE_SETTINGS = "com.example.smartdriver.screen_capture.UPDATE_SETTINGS"
         const val ACTION_SAVE_LAST_VALID_OFFER_SCREENSHOT = "com.example.smartdriver.screen_capture.SAVE_LAST_VALID"
+
+        // Congela OCR por curto período (usado na visualização de screenshots do histórico)
         const val ACTION_FREEZE_OCR = "com.example.smartdriver.screen_capture.FREEZE_OCR"
+        // Retoma OCR após fechar a visualização
+        const val ACTION_RESUME_AFTER_PREVIEW = "com.example.smartdriver.screen_capture.RESUME_AFTER_PREVIEW"
 
         const val ACTION_OCR_ENABLE = "com.example.smartdriver.screen_capture.OCR_ENABLE"
         const val ACTION_OCR_DISABLE = "com.example.smartdriver.screen_capture.OCR_DISABLE"
@@ -104,26 +106,39 @@ class ScreenCaptureService : Service() {
     private var lastScreenHash: Int? = null
     private var lastHashTime: Long = 0L
 
-    // Screenshot pendente
+    // Screenshot pendente (buffer estável)
     @Volatile private var lastBitmapForPotentialSave: Bitmap? = null
     private var screenshotCounter = 0
 
     // Freeze curto
     @Volatile private var ocrFreezeUntil = 0L
-    @Volatile private var lastCandidateBitmap: android.graphics.Bitmap? = null
+
+    // Buffer CANDIDATO (instantâneo da primeira deteção)
+    @Volatile private var lastCandidateBitmap: Bitmap? = null
     @Volatile private var lastCandidateSignature: String? = null
     @Volatile private var lastCandidateTime: Long = 0L
+
+    // Meta buffers / dedupe
     @Volatile private var bufferedOfferSignature: String? = null
     @Volatile private var lastSavedOfferSignature: String? = null
     @Volatile private var lastSavedTime: Long = 0L
 
-    // NOVO: tripId corrente (vem do OverlayService)
+    // NOVO: oferta em espera para a viagem seguinte (primeira que surge durante a viagem)
+    @Volatile private var nextOfferBitmap: Bitmap? = null
+    @Volatile private var nextOfferSignature: String? = null
+
+    // Coordenação com Overlay (latch do “A recolher”)
+    @Volatile private var inFlightPickupLatch: Boolean = false
     @Volatile private var currentTripId: String? = null
+
+    // STEP 3 — Debounce do popup "Acompanhar viagem"
+    @Volatile private var lastStartPromptMs: Long = 0L
+    private val START_PROMPT_DEBOUNCE_MS = 3500L
 
     private fun isOcrAllowedNow(): Boolean = System.currentTimeMillis() >= ocrFreezeUntil
     fun freezeOcrFor(ms: Long = 900L) { ocrFreezeUntil = System.currentTimeMillis() + ms }
 
-    // Estabilidade multi-frame
+    // Estabilidade multi-frame (mesma do teu serviço original)
     private class StabilityWindow(
         private val windowMs: Long = 1200L,
         private val minVotes: Int = 3
@@ -149,7 +164,7 @@ class ScreenCaptureService : Service() {
     }
     private val stability = StabilityWindow(windowMs = 1200L, minVotes = 3)
 
-    // Regras
+    // Regras (iguais)
     private data class BizRules(
         val minEurPerKm: Double = 0.38,
         val minMinutes: Int = 7,
@@ -195,34 +210,26 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    // Coordenação com Overlay (latch do “A recolher”)
-    @Volatile private var inFlightPickupLatch: Boolean = false
     private val overlayEventsReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             when (i?.action) {
                 OverlayService.ACTION_EVT_TRACKING_STARTED -> {
                     inFlightPickupLatch = true
-                    // NOVO: apanhar tripId do broadcast (se existir)
                     currentTripId = try { i.getStringExtra(OverlayService.EXTRA_TRIP_ID) } catch (_: Exception) { null }
                     Log.i(TAG, "EVENT: tracking started → latch ON (tripId=$currentTripId)")
                     try {
                         processingHandler.post {
-                            // Preferir buffer estável; caso não exista, usar candidato recente (<5s)
+                            // Mantido: preferir buffer estável; fallback para candidato recente
                             var b: Bitmap? = lastBitmapForPotentialSave
                             var sig: String? = bufferedOfferSignature
                             if ((b == null || b.isRecycled) && lastCandidateBitmap != null && !lastCandidateBitmap!!.isRecycled) {
                                 val age = System.currentTimeMillis() - lastCandidateTime
-                                if (age <= 5000L) {
-                                    // aplicar crop no momento do save
+                                if (age <= 60_000L) {
                                     try {
-                                        val croppedCand = ScreenshotCropper.cropToSystemBarsSafeArea(
+                                        val croppedCand = ScreenshotCropper.cropToVisibleContentAuto(
                                             applicationContext,
                                             lastCandidateBitmap!!,
-                                            0f,
-                                            extraBottomTrimPercent = 0.05f,
-                                            extraTopTrimPercent = 0.02f,
-                                            extraLeftTrimPercent = 0.01f,
-                                            extraRightTrimPercent = 0.01f
+                                            0f
                                         )
                                         b = croppedCand
                                         sig = lastCandidateSignature
@@ -232,13 +239,13 @@ class ScreenCaptureService : Service() {
                             } else if (b != null) {
                                 Log.i(TAG, "save: from STABLE buffer")
                             }
+
                             if (b != null && !b.isRecycled && preferences.getBoolean(KEY_SAVE_IMAGES, false)) {
-                                // Dedupe simples por assinatura/tempo
                                 val now = System.currentTimeMillis()
                                 if (sig != null && sig == lastSavedOfferSignature && now - lastSavedTime < 2000L) {
                                     Log.i(TAG, "save: dedupe skip")
                                 } else {
-                                    // >>> Guarda em storage privado por viagem e indexa
+                                    // Guarda no storage interno do app e indexa no histórico (igual ao teu)
                                     val saved = TripMediaStorage.saveBitmapForTrip(applicationContext, b, currentTripId)
                                     if (saved != null) {
                                         TripScreenshotIndex.add(applicationContext, saved.absolutePath, saved.timestampMillis, currentTripId)
@@ -246,7 +253,7 @@ class ScreenCaptureService : Service() {
                                         lastSavedTime = now
                                     }
                                 }
-                                // Limpar buffers
+                                // Limpar buffers do accepted shot
                                 lastBitmapForPotentialSave = null
                                 try { if (lastCandidateBitmap != null && !lastCandidateBitmap!!.isRecycled) lastCandidateBitmap!!.recycle() } catch (_: Exception) {}
                                 lastCandidateBitmap = null
@@ -260,6 +267,19 @@ class ScreenCaptureService : Service() {
                     stability.clear()
                     lastDetectedOfferSignature = null
                     Log.i(TAG, "EVENT: tracking ended → latch OFF")
+
+                    // PROMOVER a "oferta em espera" (primeira que surgiu durante a viagem) para o buffer live,
+                    // para estar pronta a ser usada na próxima viagem.
+                    try {
+                        val w = nextOfferBitmap
+                        if (w != null && !w.isRecycled) {
+                            try { lastBitmapForPotentialSave?.recycle() } catch (_: Exception) {}
+                            lastBitmapForPotentialSave = w.copy(w.config ?: Bitmap.Config.ARGB_8888, false)
+                            bufferedOfferSignature = nextOfferSignature
+                        }
+                    } catch (_: Exception) {}
+                    try { nextOfferBitmap?.recycle() } catch (_: Exception) {}
+                    nextOfferBitmap = null; nextOfferSignature = null
                 }
             }
         }
@@ -279,7 +299,7 @@ class ScreenCaptureService : Service() {
         getScreenMetrics()
         startForeground(NOTIFICATION_ID, createNotification("SmartDriver ativo"))
 
-        // Watchdog
+        // Watchdog (inalterado)
         mainHandler.postDelayed(object : Runnable {
             override fun run() {
                 try {
@@ -303,6 +323,7 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Dados de consentimento opcionais vindos da Activity
         if (intent?.hasExtra(EXTRA_RESULT_CODE) == true && intent.hasExtra(EXTRA_RESULT_DATA)) {
             val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
             val data = getParcelableExtraCompat(intent, EXTRA_RESULT_DATA, Intent::class.java)?.clone() as? Intent
@@ -356,7 +377,6 @@ class ScreenCaptureService : Service() {
                 }
             }
 
-            // NOVO: só grava manualmente se tracking ativo; guarda no histórico
             ACTION_SAVE_LAST_VALID_OFFER_SCREENSHOT -> {
                 processingHandler.post {
                     if (!inFlightPickupLatch) { lastBitmapForPotentialSave = null; return@post }
@@ -382,6 +402,14 @@ class ScreenCaptureService : Service() {
             }
 
             ACTION_FREEZE_OCR -> freezeOcrFor(900L)
+
+            ACTION_RESUME_AFTER_PREVIEW -> {
+                ocrFreezeUntil = 0L
+                // Se por algum motivo a captura pausou, reativa de forma suave
+                if (!isCapturingActive.get() && hasValidProjectionData() && ocrEnabled && !userStopRequested) {
+                    tryStartCaptureWithoutPrompt("resume-after-preview")
+                }
+            }
         }
         return START_STICKY
     }
@@ -515,6 +543,7 @@ class ScreenCaptureService : Service() {
 
     private fun stopScreenCaptureInternal() {
         if (!isCapturingActive.getAndSet(false)) {
+            // Mesmo se já não estiver ativo, limpa superfícies/objetos locais
             try { virtualDisplay?.release() } catch (_: Exception) {} finally { virtualDisplay = null }
             try { imageReader?.close() } catch (_: Exception) {} finally { imageReader = null }
             try { mediaProjection?.stop() } catch (_: Exception) {} finally { mediaProjection = null }
@@ -531,6 +560,7 @@ class ScreenCaptureService : Service() {
             recyclePotentialSaveBitmap("captura parada")
         }
         updateNotification("SmartDriver (captura parada)")
+        // NOTA: NÃO limpamos MediaProjectionData aqui — o utilizador controla via MainActivity.
     }
 
     private fun processAvailableImage(reader: ImageReader?) {
@@ -677,23 +707,35 @@ class ScreenCaptureService : Service() {
                 ocr.processThrottled(bitmapCopyForListeners, 0, 350)
                     .addOnSuccessListener listener@{ visionText ->
                         val extractedText = visionText.text
-                        processingHandler.post { recyclePotentialSaveBitmap("novo OCR") }
                         if (extractedText.isBlank()) return@listener
 
-                        // Palavra-chave “A recolher” → promover último semáforo mostrado
+                        // Palavra-chave “A recolher” → promover último semáforo mostrado (mantido)
                         if (!inFlightPickupLatch && containsPickupKeyword(extractedText)) {
-                            try {
-                                startService(Intent(this, OverlayService::class.java).apply {
-                                    action = OverlayService.ACTION_START_TRACKING_FROM_LAST
-                                })
-                            } catch (_: Exception) { }
+                            val now = System.currentTimeMillis()
+                            // STEP 3 — Debounce: só dispara popup se passaram 3.5s desde o último pedido
+                            if (now - lastStartPromptMs >= START_PROMPT_DEBOUNCE_MS) {
+                                lastStartPromptMs = now
+                                try {
+                                    val intent = Intent(this, OverlayService::class.java).apply {
+                                        action = OverlayService.ACTION_CONFIRM_START_TRACKING
+                                    }
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        startForegroundService(intent)
+                                    } else {
+                                        startService(intent)
+                                    }
+                                    // Importante: NÃO armar o latch aqui (isso ficou resolvido no Passo 2)
+                                } catch (_: Exception) { }
+                            }
                         }
+
+
 
                         val offerData = imageAnalysisUtils.analyzeTextForOffer(
                             visionText, bitmapCopyForListeners.width, bitmapCopyForListeners.height)
                         if (offerData == null || !offerData.isValid()) return@listener
 
-                        // Bufferiza CANDIDATO imediatamente
+                        // Bufferiza CANDIDATO imediatamente (antes da estabilidade)
                         try {
                             lastCandidateSignature = createOfferSignature(offerData)
                             lastCandidateTime = System.currentTimeMillis()
@@ -733,23 +775,33 @@ class ScreenCaptureService : Service() {
 
                                 if (preferences.getBoolean(KEY_SAVE_IMAGES, false)) {
                                     try {
-                                        val cropped = ScreenshotCropper.cropToSystemBarsSafeArea(
+                                        val cropped = ScreenshotCropper.cropToVisibleContentAuto(
                                             applicationContext,
                                             bitmapCopyForListeners,
-                                            0f,
-                                            extraBottomTrimPercent = 0.05f,
-                                            extraTopTrimPercent = 0.07f,
-                                            extraLeftTrimPercent = 0.04f,
-                                            extraRightTrimPercent = 0.04f
+                                            0f
                                         )
-                                        lastBitmapForPotentialSave = cropped.copy(
-                                            cropped.config ?: Bitmap.Config.ARGB_8888, false
-                                        )
-                                        // NOVO: manter assinatura do STABLE para dedupe
-                                        bufferedOfferSignature = offerSignature
+                                        if (!inFlightPickupLatch) {
+                                            // IDLE: só a última oferta fica em memória
+                                            if (bufferedOfferSignature != null && bufferedOfferSignature != offerSignature) {
+                                                try { lastBitmapForPotentialSave?.recycle() } catch (_: Exception) {}
+                                                lastBitmapForPotentialSave = null
+                                            }
+                                            lastBitmapForPotentialSave = cropped.copy(
+                                                cropped.config ?: Bitmap.Config.ARGB_8888, false
+                                            )
+                                            bufferedOfferSignature = offerSignature
+                                        } else {
+                                            // EM VIAGEM: guardar apenas a PRIMEIRA oferta em espera; nunca substituir
+                                            if (nextOfferBitmap == null) {
+                                                nextOfferBitmap = cropped.copy(cropped.config ?: Bitmap.Config.ARGB_8888, false)
+                                                nextOfferSignature = offerSignature
+                                            }
+                                        }
                                     } catch (_: Exception) {
-                                        lastBitmapForPotentialSave = null
-                                        bufferedOfferSignature = null
+                                        if (!inFlightPickupLatch) {
+                                            lastBitmapForPotentialSave = null
+                                            bufferedOfferSignature = null
+                                        }
                                     }
                                 } else {
                                     processingHandler.post { recyclePotentialSaveBitmap("save off") }
@@ -809,7 +861,6 @@ class ScreenCaptureService : Service() {
         bufferedOfferSignature = null
     }
 
-    // Mantido para debug (não usado nas ofertas)
     private fun saveScreenshotToGallery(bitmapToSave: Bitmap?, prefix: String) {
         if (bitmapToSave == null || bitmapToSave.isRecycled) return
         val timeStamp = SimpleDateFormat("yyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
@@ -881,12 +932,6 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning.set(false)
-
-        if (::processingThread.isInitialized && processingThread.isAlive) {
-            processingHandler.post { recyclePotentialSaveBitmap("onDestroy") }
-        } else {
-            recyclePotentialSaveBitmap("onDestroy")
-        }
 
         userStopRequested = true
         stopScreenCaptureInternal()

@@ -79,12 +79,13 @@ android {
 
 dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
-
+    implementation "org.osmdroid:osmdroid-android:6.1.20"
+    implementation "com.google.android.gms:play-services-location:21.3.0"
     implementation 'androidx.core:core-ktx:1.9.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.8.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-
+    implementation "com.google.android.gms:play-services-maps:18.2.0"
     // ✅ ML Kit Standalone (Text Recognition v2)
     implementation 'com.google.mlkit:text-recognition:16.0.1'
 

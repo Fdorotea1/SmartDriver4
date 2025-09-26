@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tema para o mapa como sobreposição, SEM escurecer o fundo -->
+    <style name="Theme.SmartDriver.MapOverlay" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Não escurecer o ecrã por trás -->
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:backgroundDimAmount">0.0</item>
+
+        <!-- Janela translúcida e fundo transparente -->
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>

@@ -1,3 +1,4 @@
+
 package com.example.smartdriver.overlay
 
 import android.graphics.Typeface
@@ -33,13 +34,15 @@ import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import android.os.SystemClock
-
-// Tag de logs
-private const val TAG_HOUR = "SD.HourColor"
-private const val TAG_HEALTH = "SD.Health"
+import android.app.AlertDialog
+import android.os.Build
+import android.view.WindowManager
+import android.graphics.drawable.GradientDrawable
 
 class OverlayService : Service() {
 
+    private var startConfirmDialog: AlertDialog? = null
+    private var dismissConfirmDialog: AlertDialog? = null
     // ===== Helpers de clamp seguros (evitam ranges invertidos em foldables) =====
     private fun clampInt(value: Int, a: Int, b: Int): Int {
         val min = kotlin.math.min(a, b)
@@ -52,7 +55,7 @@ class OverlayService : Service() {
         return if (min == max) min else value.coerceIn(min, max)
     }
 
-    // ===== Receiver para mudanças de configuração (fold/unfold, rotação, multi‑janela) =====
+    // ===== Receiver para mudanças de configuração (fold/unfold, rotação, multi-janela) =====
     private val configChangeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (Intent.ACTION_CONFIGURATION_CHANGED == intent?.action) {
@@ -66,7 +69,7 @@ class OverlayService : Service() {
     }
 
     /**
-     * Recalcula métricas de ecrã e re‑aperta (clamp) todas as overlays às novas dimensões,
+     * Recalcula métricas de ecrã e re-aperta (clamp) todas as overlays às novas dimensões,
      * evitando IllegalArgumentException: coerceIn com max < min.
      */
     private fun onConfigChangedReposition() {
@@ -119,6 +122,15 @@ class OverlayService : Service() {
 
 
     companion object {
+        const val TAG_HEALTH = "OverlayHealth"
+        const val TAG_HOUR = "OverlayHour"
+        const val ACTION_CONFIRM_DISMISS_MAIN_OVERLAY = "com.example.smartdriver.overlay.CONFIRM_DISMISS_MAIN_OVERLAY"
+        const val ACTION_CONFIRM_START_TRACKING = "com.example.smartdriver.overlay.CONFIRM_START_TRACKING"
+
+        // >>> NOVAS AÇÕES para navegação vertical
+        const val ACTION_SHOW_NEXT_OVERLAY = "com.example.smartdriver.overlay.SHOW_NEXT_OVERLAY"
+        const val ACTION_SHOW_PREV_OVERLAY = "com.example.smartdriver.overlay.SHOW_PREV_OVERLAY"
+
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "overlay_service_channel"
         private const val CHANNEL_NAME = "Overlay Service"
@@ -212,6 +224,9 @@ class OverlayService : Service() {
     private var dropZoneView: ImageView? = null
     private var quickMenuView: MenuView? = null
     private var floatingIconView: FloatingIconView? = null
+    // --- Detalhes do "verso" do semáforo ---
+    private var detailsOverlayView: LinearLayout? = null
+    private var isDetailsVisible: Boolean = false
 
     private lateinit var mainLayoutParams: WindowManager.LayoutParams
     private lateinit var trackingLayoutParams: WindowManager.LayoutParams
@@ -290,6 +305,7 @@ class OverlayService : Service() {
     @Volatile private var finishKeywordVisible: Boolean = false
     private var lastFinishVisibleState: Boolean = false
     private var finishConfirmDialog: AlertDialog? = null
+    private val offerQueue = com.example.smartdriver.utils.OfferQueue()
     private var stopBypassConfirmOnce: Boolean = false
 
     // ====== Watchdog / Auto-Healing ======
@@ -332,6 +348,49 @@ class OverlayService : Service() {
     // ===== NOVO: tripId da sessão de tracking =====
     @Volatile private var currentTripId: String? = null
 
+    // ======= Histórico em memória para navegação vertical =======
+    private val overlayHistory = mutableListOf<Pair<OfferData, EvaluationResult>>()
+    private var currentIndex = -1
+
+    private fun setCurrent(index: Int) {
+        if (overlayHistory.isEmpty()) return
+        val i = ((index % overlayHistory.size) + overlayHistory.size) % overlayHistory.size // wrap-around
+        currentIndex = i
+        val (offer, eval) = overlayHistory[i]
+        ensureMainOverlayExists()
+        mainOverlayView?.updateState(eval, offer)
+        mainOverlayView?.showBanner("${i + 1}/${overlayHistory.size}", OverlayView.BannerType.INFO, 900)
+    }
+
+    private fun showNext() { if (overlayHistory.isNotEmpty()) setCurrent(currentIndex + 1) }
+    private fun showPrev() { if (overlayHistory.isNotEmpty()) setCurrent(currentIndex - 1) }
+
+    /** Adiciona ao histórico (ou atualiza se igual) e foca. */
+    private fun pushOrUpdate(offer: OfferData, eval: EvaluationResult) {
+        val keyNew = listOf(
+            offer.moradaRecolha, offer.moradaDestino, offer.value, offer.duration, offer.distance
+        ).joinToString("|")
+        val existingIdx = overlayHistory.indexOfFirst { (o, _) ->
+            listOf(o.moradaRecolha, o.moradaDestino, o.value, o.duration, o.distance).joinToString("|") == keyNew
+        }
+        if (existingIdx >= 0) {
+            overlayHistory[existingIdx] = offer to eval
+            setCurrent(existingIdx)
+        } else {
+            overlayHistory += offer to eval
+            setCurrent(overlayHistory.lastIndex)
+        }
+        // manter últimos mostrados (compatibilidade com resto do serviço)
+        lastShownOffer = offer
+        lastShownEval = eval
+    }
+
+    private fun clearHistory() {
+        overlayHistory.clear()
+        currentIndex = -1
+    }
+    // ============================================================
+
     override fun onCreate() {
         super.onCreate()
         isRunning.set(true)
@@ -352,6 +411,19 @@ class OverlayService : Service() {
         if (shiftSession.isActive && shiftStartTimeMs == 0L) {
             shiftStartTimeMs = System.currentTimeMillis()
             prefs.edit().putLong(KEY_SHIFT_START_MS, shiftStartTimeMs).apply()
+        }
+
+        // Registar alterações de configuração (fold/rotação/etc.)
+        try {
+            val flt = IntentFilter(Intent.ACTION_CONFIGURATION_CHANGED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(configChangeReceiver, flt, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(configChangeReceiver, flt)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG_HEALTH, "Falha a registar configChangeReceiver: ${t.message}")
         }
 
         startForeground(NOTIFICATION_ID, createNotification(getString(R.string.notification_overlay_ready)))
@@ -451,6 +523,12 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_CONFIRM_DISMISS_MAIN_OVERLAY -> { showDismissConfirmPrompt(); return START_NOT_STICKY }
+
+            // >>> NOVAS AÇÕES (navegação vertical do semáforo)
+            ACTION_SHOW_NEXT_OVERLAY -> { showNext(); return START_NOT_STICKY }
+            ACTION_SHOW_PREV_OVERLAY -> { showPrev(); return START_NOT_STICKY }
+
             ACTION_TOGGLE_SHIFT_STATE -> {
                 if (intent.hasExtra(EXTRA_SHIFT_TARGET)) {
                     shiftSession.start(intent.getDoubleExtra(EXTRA_SHIFT_TARGET, 0.0))
@@ -491,6 +569,51 @@ class OverlayService : Service() {
             ACTION_END_SHIFT -> handleEndShift()
             ACTION_APPLY_SHIFT_DELTA -> handleApplyShiftDelta(intent)
             ACTION_START_TRACKING_FROM_LAST -> handleStartTrackingFromLast()
+
+            ACTION_CONFIRM_START_TRACKING -> {
+                // Evita popups duplicados e só mostra se não estiver já a acompanhar
+                if ((startConfirmDialog?.isShowing == true) || isTrackingOverlayAdded || tripTracker.isTracking) {
+                    return START_NOT_STICKY
+                }
+                try {
+                    val dialog = AlertDialog.Builder(this)
+                        .setTitle("Iniciar acompanhamento")
+                        .setMessage("Deseja acompanhar a viagem?")
+                        .setPositiveButton("Acompanhar") { d, _ ->
+                            try {
+                                handleStartTrackingFromLast()
+                                try { offerQueue.clearOnStart() } catch (_: Exception) {}
+                                try { hideMainOverlay() } catch (_: Exception) {}
+                            } catch (_: Exception) { }
+                            d.dismiss()
+                        }
+                        .setNegativeButton("Cancelar") { d, _ -> d.dismiss() }
+                        .setNeutralButton("Descartar") { d, _ ->
+                            try { handleDismissMainOverlayOnly() } catch (_: Exception) {}
+                            d.dismiss()
+                        }
+                        .setOnDismissListener { startConfirmDialog = null }
+                        .create()
+
+                    dialog.setCanceledOnTouchOutside(true)
+
+                    // *** Essencial: permitir dialog a partir de Service ***
+                    dialog.window?.let { w ->
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            w.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            w.setType(WindowManager.LayoutParams.TYPE_PHONE)
+                        }
+                        w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                    }
+
+                    dialog.show()
+                    startConfirmDialog = dialog
+                } catch (_: Exception) { startConfirmDialog = null }
+                return START_NOT_STICKY
+            }
+
 
             // UI switches (novo)
             ACTION_SWITCH_TO_ICON -> switchBubbleToIconUiOnly()
@@ -544,12 +667,11 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
 
-// Unregister config receiver
+        // Unregister config receiver
         try {
             unregisterReceiver(configChangeReceiver)
         } catch (_: Throwable) {
         }
-
 
         super.onDestroy()
         if (tripTracker.isTracking) tripTracker.discard()
@@ -603,6 +725,8 @@ class OverlayService : Service() {
         if (isDebugBuild) Log.d(TAG_HOUR, "€/h prev. rating definido a partir de ${if (hourFromEval != null) "EVAL" else "COMPUTE"}: $baseHour")
 
         tripTracker.start(offer, eval)
+
+        try { offerQueue.clearOnStart() } catch (_: Exception) {}
         OfferManager.getInstance(applicationContext).setTrackingActive(true)
         hideOfferIndicator()
         updateShiftNotification()
@@ -657,6 +781,8 @@ class OverlayService : Service() {
             if (isDebugBuild) Log.d(TAG_HOUR, "€/h prev. rating definido a partir de ${if (hourFromEval != null) "EVAL" else "COMPUTE"}: $baseHour")
 
             tripTracker.start(offerData, initialEval)
+
+            try { offerQueue.clearOnStart() } catch (_: Exception) {}
             OfferManager.getInstance(applicationContext).setTrackingActive(true)
             hideOfferIndicator()
             updateShiftNotification()
@@ -720,10 +846,17 @@ class OverlayService : Service() {
         val evalResult = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
         val offerData = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java)
         if (evalResult != null && offerData != null) {
-            lastShownEval = evalResult
-            lastShownOffer = offerData
 
-            showMainOverlay(evalResult, offerData)
+            val pushed = offerQueue.push(offerData, evalResult) ?: offerQueue.peek()
+            if (pushed != null) {
+                lastShownEval = pushed.eval
+                lastShownOffer = pushed.offer
+                showMainOverlay(pushed.eval, pushed.offer)
+            } else {
+                lastShownEval = evalResult
+                lastShownOffer = offerData
+                showMainOverlay(evalResult, offerData)
+            }
             updateShiftNotification()
 
             overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
@@ -743,7 +876,17 @@ class OverlayService : Service() {
             touchActivity("showOverlay")
         }
     }
-    private fun handleDismissMainOverlayOnly() { hideMainOverlay() }
+    private fun handleDismissMainOverlayOnly() {
+        offerQueue.discardTopConfirmed()
+        val top = offerQueue.peek()
+        if (top != null) {
+            lastShownEval = top.eval
+            lastShownOffer = top.offer
+            showMainOverlay(top.eval, top.offer)
+        } else {
+            hideMainOverlay()
+        }
+    }
 
     private fun handleUpdateSettings(intent: Intent?) {
         loadTrackingThresholds()
@@ -926,6 +1069,24 @@ class OverlayService : Service() {
         removeFloatingIconOverlay()
         hideOfferIndicator()
         hideFinishConfirmPrompt()
+        removeDetailsOverlay()
+    }
+
+    private fun ensureMainOverlayExists() {
+        val wm = windowManager ?: return
+        if (mainOverlayView == null) {
+            mainOverlayView = OverlayView(this)
+            applyAppearanceSettingsToView(mainOverlayView)
+        }
+        try {
+            if (!isMainOverlayAdded) {
+                wm.addView(mainOverlayView, mainLayoutParams)
+                isMainOverlayAdded = true
+            }
+        } catch (_: Exception) {
+            isMainOverlayAdded = false
+            mainOverlayView = null
+        }
     }
 
     private fun showMainOverlay(eR: EvaluationResult, oD: OfferData) {
@@ -940,7 +1101,9 @@ class OverlayService : Service() {
         fadedAlpha = (baseOverlayAlpha * 0.25f).coerceAtLeast(0.08f)
 
         mainOverlayView?.alpha = baseOverlayAlpha
-        mainOverlayView?.updateState(eR, oD)
+
+        // >>> Em vez de updateState direto, regista no histórico e foca
+        pushOrUpdate(oD, eR)
 
         mainOverlayView?.setOnClickListener {
             overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
@@ -949,6 +1112,27 @@ class OverlayService : Service() {
             hideOfferIndicator()
             startOverlayFadeTimer()
             touchActivity("overlayClick")
+
+            // --- TOGGLE do painel de detalhes (verso) ---
+            if (isDetailsVisible) {
+                hideDetailsOverlay()
+            } else {
+                // placeholders de moradas (virão no passo seguinte); kms/tempo aproveitados do OfferData
+                val kmToPickup = oD.pickupDistance.takeIf { it.isNotBlank() }
+                val tripKm = oD.tripDistance.takeIf { it.isNotBlank() }
+                val tripMin = (oD.tripDuration.toIntOrNull()
+                    ?: oD.calculateTotalTimeMinutes()
+                    ?: 0).let { if (it > 0) "$it min" else null }
+
+                updateDetailsOverlayText(
+                    pickup = null,
+                    drop = null,
+                    kmToPickup = kmToPickup,
+                    tripKm = tripKm,
+                    tripMin = tripMin
+                )
+                showDetailsOverlayNearMain()
+            }
         }
         mainOverlayView?.setOnTouchListener { _, _ ->
             overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
@@ -979,6 +1163,7 @@ class OverlayService : Service() {
         hasActiveOffer = false
         isMainOverlayTranslucent = false
         hideOfferIndicator()
+        hideDetailsOverlay()
 
         if (isMainOverlayAdded && mainOverlayView != null && windowManager != null) {
             try {
@@ -989,6 +1174,8 @@ class OverlayService : Service() {
                 mainOverlayView = null
             }
         }
+        // >>> limpar histórico quando fecha o overlay
+        clearHistory()
     }
 
     private fun showTrackingOverlay(
@@ -1171,8 +1358,7 @@ class OverlayService : Service() {
         if (isQuickMenuAdded && quickMenuView != null && windowManager != null) {
             try { windowManager?.removeViewImmediate(quickMenuView) } catch (_: Exception) { }
             finally {
-                isQuickMenuAdded = false
-                quickMenuView = null
+                isQuickMenuAdded = false; quickMenuView = null
                 donutGoalView = null; seekBarGoalView = null; textGoalValueView = null
                 donutTimeView = null; donutAverageView = null; donutEtaView = null
                 tvShiftTimerView = null; tvShiftStateChip = null
@@ -1823,7 +2009,7 @@ class OverlayService : Service() {
         if (parts.size < 2) return null
         val h = parts.getOrNull(0)?.toLongOrNull() ?: 0L
         val m = (parts.getOrNull(1)?.toLongOrNull() ?: 0L)
-        val s = (parts.getOrNull(2)?.toLongOrNull() ?: 0L)
+        val s = parts.getOrNull(2)?.toLongOrNull() ?: 0L
         return h*3600 + m*60 + s
     }
     private fun formatHms(seconds: Long): String {
@@ -2065,4 +2251,142 @@ class OverlayService : Service() {
         updateFinishPromptForState(edgeOnly = false)
     }
     // ========================================================================
+
+
+    private fun showDismissConfirmPrompt() {
+        if (dismissConfirmDialog?.isShowing == true) return
+        if (!isMainOverlayAdded) return
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Descartar oferta")
+            .setMessage("Deseja descartar esta oferta?")
+            .setPositiveButton("Descartar") { d, _ ->
+                try { handleDismissMainOverlayOnly() } catch (_: Exception) {}
+                d.dismiss()
+            }
+            .setNegativeButton("Cancelar") { d, _ -> d.dismiss() }
+            .create()
+
+        dialog.setOnDismissListener { dismissConfirmDialog = null }
+
+        dialog.window?.let { w ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                w.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+            } else {
+                @Suppress("DEPRECATION")
+                w.setType(WindowManager.LayoutParams.TYPE_PHONE)
+            }
+        }
+        try {
+            dialog.show()
+            dismissConfirmDialog = dialog
+        } catch (_: Exception) {
+            dismissConfirmDialog = null
+        }
+    }
+
+    // ========================= Detalhes "verso" do semáforo =========================
+    @SuppressLint("SetTextI18n")
+    private fun ensureDetailsOverlayCreated() {
+        if (detailsOverlayView != null) return
+        val ctx = this
+        val ll = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            alpha = 0f
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(Color.parseColor("#CC000000")) // semi-preto
+            }
+            isClickable = false
+            isFocusable = false
+        }
+
+        fun label(text: String, bold: Boolean = false): TextView =
+            TextView(ctx).apply {
+                this.text = text
+                setTextColor(Color.WHITE)
+                textSize = 13f
+                if (bold) setTypeface(typeface, Typeface.BOLD)
+            }
+
+        ll.addView(label("Recolha:", bold = true))
+        ll.addView(label("Destino:"))
+        ll.addView(label("Até recolha:"))
+        ll.addView(label("Viagem:"))
+        ll.addView(label("Tempo:"))
+
+        detailsOverlayView = ll
+    }
+
+    private fun attachDetailsOverlayIfNeeded() {
+        ensureDetailsOverlayCreated()
+        if (detailsOverlayView?.parent == null) {
+            val wm = windowManager ?: return
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = (mainLayoutParams.x)
+                y = (mainLayoutParams.y) + dp(4)
+            }
+            try { wm.addView(detailsOverlayView, lp) } catch (_: Exception) {}
+        }
+    }
+
+    private fun updateDetailsOverlayText(
+        pickup: String?, drop: String?, kmToPickup: String?, tripKm: String?, tripMin: String?
+    ) {
+        val ll = detailsOverlayView ?: return
+        val children = (0 until ll.childCount).map { ll.getChildAt(it) as TextView }
+        // ordem: Recolha / Destino / Até recolha / Viagem / Tempo
+        children.getOrNull(0)?.text = "Recolha: " + (pickup ?: "—")
+        children.getOrNull(1)?.text = "Destino: " + (drop ?: "—")
+        children.getOrNull(2)?.text = "Até recolha: " + (kmToPickup ?: "—")
+        children.getOrNull(3)?.text = "Viagem: " + (tripKm ?: "—")
+        children.getOrNull(4)?.text = "Tempo: " + (tripMin ?: "—")
+    }
+
+    private fun showDetailsOverlayNearMain() {
+        attachDetailsOverlayIfNeeded()
+        val wm = windowManager ?: return
+        val v = detailsOverlayView ?: return
+        val lp = v.layoutParams as WindowManager.LayoutParams
+        lp.x = (mainLayoutParams.x) + dp(4)
+        lp.y = (mainLayoutParams.y) + dp(4)
+        try { wm.updateViewLayout(v, lp) } catch (_: Exception) {}
+        v.visibility = View.VISIBLE
+        v.animate().alpha(1f).setDuration(120).start()
+        isDetailsVisible = true
+    }
+
+    private fun hideDetailsOverlay() {
+        val v = detailsOverlayView ?: return
+        v.animate().alpha(0f).setDuration(100).withEndAction {
+            v.visibility = View.GONE
+        }.start()
+        isDetailsVisible = false
+    }
+
+    private fun removeDetailsOverlay() {
+        val wm = windowManager
+        val v = detailsOverlayView
+        if (wm != null && v != null && v.parent != null) {
+            try { wm.removeViewImmediate(v) } catch (_: Exception) {}
+        }
+        detailsOverlayView = null
+        isDetailsVisible = false
+    }
+
+    private fun dp(v: Int) = (resources.displayMetrics.density * v).toInt()
+    // =======================================================================
 }
