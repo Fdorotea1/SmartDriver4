@@ -1,42 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/splashRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/white"
-    tools:context=".SplashActivity">
+    android:background="@android:color/black">
 
-    <!-- ImageView para exibir o logo -->
-    <ImageView
-        android:id="@+id/splashImageView"
-        android:layout_width="150dp"
-        android:layout_height="150dp"
-        android:layout_marginBottom="16dp"
-        android:contentDescription="@string/splash_logo_description"
-        app:layout_constraintBottom_toTopOf="@+id/splashTextView"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.45"
-        app:layout_constraintVertical_chainStyle="packed"
-        app:srcCompat="@drawable/smartdriver"
-        />
-    <!-- ^^^ Verifique se "@drawable/smartdriver" é o nome correto do seu arquivo de imagem -->
-
-    <!-- TextView existente (agora posicionado abaixo da ImageView) -->
-    <TextView
-        android:id="@+id/splashTextView"
+    <!-- Bloco vertical centrado para manter as palavras coladas -->
+    <LinearLayout
+        android:id="@+id/titleBlock"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="@string/app_name"
-        android:textColor="@color/black"
-        android:textSize="36sp"
-        android:textStyle="bold"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/splashImageView"
-        />
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- Título (dobrado: 72sp) -->
+        <TextView
+            android:id="@+id/splashTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SmartDriver"
+            android:textStyle="bold"
+            android:textSize="72sp"
+            android:textColor="#C6FF00"
+            android:includeFontPadding="false" />
+
+        <!-- Tagline (dobrada: 36sp) — texto surge letra a letra pelo código -->
+        <TextView
+            android:id="@+id/splashTagline"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="36sp"
+            android:textColor="#C6FF00"
+            android:includeFontPadding="false"
+            android:layout_marginTop="4dp" />
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

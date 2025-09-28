@@ -1,9 +1,9 @@
 package com.example.smartdriver.utils
 
 import android.content.Context
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import com.example.smartdriver.overlay.OverlayService
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -37,7 +37,7 @@ class TripTracker(
     private var initialKmRating: IndividualRating = IndividualRating.UNKNOWN
     private var combinedBorderRating: BorderRating = BorderRating.GRAY
 
-    // --- Campos para o modo MANUAL (novos) ---
+    // --- Campos para o modo MANUAL ---
     private var manualDistanceKm: Double? = null
     private var manualDurationMinutes: Int? = null
     private var manualServiceType: String? = null
@@ -86,7 +86,7 @@ class TripTracker(
         updateHandler.post(updateRunnable)
     }
 
-    // -------- Arranque MANUAL (novo) --------
+    // -------- Arranque MANUAL --------
     fun startManual(
         valueEuro: Double,
         distanceKm: Double?,
@@ -128,6 +128,10 @@ class TripTracker(
         val serviceType = offerData?.serviceType?.takeIf { it.isNotEmpty() }
             ?: manualServiceType?.takeIf { it.isNotEmpty() }
 
+        // NOVO: mapear moradas do OfferData para o histórico
+        val pickupAddr = offerData?.moradaRecolha?.trim()?.takeIf { it.isNotEmpty() }
+        val dropoffAddr = offerData?.moradaDestino?.trim()?.takeIf { it.isNotEmpty() }
+
         val entry = TripHistoryEntry(
             startTimeMillis = startTimeMs,
             endTimeMillis = endTime,
@@ -139,10 +143,12 @@ class TripTracker(
             initialDistanceKm = distanceKm,
             initialDurationMinutes = durationMin,
             serviceType = serviceType,
+            // moradas agora persistidas no histórico
+            pickupAddress = pickupAddr,
+            dropoffAddress = dropoffAddr,
             originalBorderRating = this.combinedBorderRating,
-            // se o teu TripHistoryEntry tem este campo, iniciamos com offerValue
-            // (se não tiver, remove esta linha)
             effectiveValue = offerValue.takeIf { it > 0 }
+            // screenshotPaths mantém default = emptyList()
         )
 
         saveHistoryEntry(entry)

@@ -18,8 +18,10 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
+import com.example.smartdriver.map.MapPreviewActivity
 import com.example.smartdriver.utils.BorderRating
 import com.example.smartdriver.utils.IndividualRating
+import com.example.smartdriver.utils.OfferData
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -67,9 +69,16 @@ class TrackingOverlayView(
         private const val PULSE_MIN_ALPHA = 120
         private const val PULSE_MAX_ALPHA = 255
         private const val PULSE_EXTRA_WIDTH_FACTOR = 2.0f
+
+        // Páginas
+        private const val TOTAL_PAGES = 5 // 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta | 4 MAPA
+        private const val PAGE_MAP = 4
+
+        // Tempo para abrir mapa automaticamente quando a página MAPA fica estável
+        private const val MAP_HOLD_MS = 2000L
     }
 
-    // páginas: 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta
+    // páginas: 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta | 4 MAPA
     private var pageIndex = 0
     private var circleDiameterPx: Int
     private var paddingPx: Float
@@ -97,6 +106,13 @@ class TrackingOverlayView(
     private var initialTouchRawX: Float = 0f
     private var initialTouchRawY: Float = 0f
     private val dragReadyRunnable = Runnable { dragReady = true; dragDelayPosted = false }
+
+    // Auto-open MAPA
+    private var mapAutoPosted = false
+    private val mapAutoRunnable = Runnable {
+        mapAutoPosted = false
+        openMapFromTracking()
+    }
 
     // dados tempo/€/h (tempo real)
     private var currentValuePerHour: Double? = null
@@ -130,6 +146,9 @@ class TrackingOverlayView(
     private var pulseEnabled = true
     private var pulseProgress = 0f // 0..1
     private var pulseAnimator: ValueAnimator? = null
+
+    // ---- NOVO: OfferData atual para alimentar o mapa quando abrir pelo menu
+    private var offerForMap: OfferData? = null
 
     init {
         val dm = resources.displayMetrics
@@ -173,8 +192,9 @@ class TrackingOverlayView(
                 if (isDragging) return false
                 cancelDragDelay()
                 sendOverlayServiceSimpleAction(OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP)
-                pageIndex = (pageIndex + 1) % 4
+                pageIndex = (pageIndex + 1) % TOTAL_PAGES
                 invalidate()
+                scheduleMapIfNeeded()
                 return true
             }
 
@@ -240,10 +260,12 @@ class TrackingOverlayView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         if (pulseEnabled) startPulse()
+        cancelMapHold()
     }
 
     override fun onDetachedFromWindow() {
         stopPulse()
+        cancelMapHold()
         super.onDetachedFromWindow()
     }
 
@@ -279,6 +301,57 @@ class TrackingOverlayView(
             dragDelayPosted = false
         }
         dragReady = false
+    }
+
+    private fun scheduleMapIfNeeded() {
+        cancelMapHold()
+        if (pageIndex == PAGE_MAP) {
+            mapAutoPosted = true
+            mainHandler.postDelayed(mapAutoRunnable, MAP_HOLD_MS)
+        }
+    }
+
+    private fun cancelMapHold() {
+        if (mapAutoPosted) {
+            mainHandler.removeCallbacks(mapAutoRunnable)
+            mapAutoPosted = false
+        }
+    }
+
+    private fun openMapFromTracking() {
+        // Envia primeiro UPDATE_MAP com as moradas atuais (se existirem)
+        val offer = offerForMap
+        val pickupAddr = offer?.moradaRecolha?.takeIf { it.isNotBlank() }
+        val destAddr   = offer?.moradaDestino?.takeIf { it.isNotBlank() }
+
+        runCatching {
+            val upd = Intent(MapPreviewActivity.ACTION_UPDATE_MAP).apply {
+                setPackage(context.packageName)
+                pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
+                destAddr?.let { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS, it) }
+            }
+            context.sendBroadcast(upd)
+        }
+
+        // Garante activity do mapa visível (singleTop para não duplicar)
+        runCatching {
+            val open = Intent(context, MapPreviewActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
+                destAddr?.let { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS, it) }
+            }
+            context.startActivity(open)
+        }
+
+        // Pede SHOW com auto-hide (a activity gere o fade/fecho)
+        runCatching {
+            val show = Intent(MapPreviewActivity.ACTION_SEMAFORO_SHOW_MAP).apply {
+                setPackage(context.packageName)
+                putExtra(MapPreviewActivity.EXTRA_AUTO_HIDE_MS, 12_000L)
+                putExtra(MapPreviewActivity.EXTRA_FADE_MS, 400L)
+            }
+            context.sendBroadcast(show)
+        }
     }
 
     private fun recalcTextMetrics() {
@@ -317,6 +390,11 @@ class TrackingOverlayView(
         currentHourRating = hR
         elapsedTimeSeconds = elSec
         invalidate()
+    }
+
+    // ---- NOVO: injetar a OfferData atual para o mapa conhecer recolha/destino
+    fun setOfferForMap(offer: OfferData?) {
+        offerForMap = offer
     }
 
     fun setCircleDiameterDp(dp: Float) {
@@ -364,15 +442,14 @@ class TrackingOverlayView(
         val cx = width / 2f
         val cy = height / 2f
 
-        // Raio base: já desconta metade do traço da moldura
-        // e leva uma folga anti-clip sub-pixel para evitar “arestas retas”.
-        val radiusBase = (min(width, height) / 2f) - borderWidthPx / 2f - 0.5f // FIX halo circular
+        // Raio base
+        val radiusBase = (min(width, height) / 2f) - borderWidthPx / 2f - 0.5f
 
         // fundo + moldura
         canvas.drawCircle(cx, cy, radiusBase, bgPaint)
         canvas.drawCircle(cx, cy, radiusBase, borderPaint)
 
-        // anel sólido (densidade de halo) — ajusta raio para manter a circunferência exterior
+        // anel sólido
         val solidStroke = borderWidthPx * 1.25f
         val solidHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -380,17 +457,17 @@ class TrackingOverlayView(
             color = borderColor
             alpha = 230
         }
-        val radiusSolid = radiusBase - (solidStroke - borderWidthPx) * 0.5f // FIX halo circular
+        val radiusSolid = radiusBase - (solidStroke - borderWidthPx) * 0.5f
         canvas.drawCircle(cx, cy, max(0f, radiusSolid), solidHaloPaint)
 
-        // pulso suave (auréola animada) — ajusta raio conforme o stroke animado
+        // pulso suave
         if (pulseEnabled) {
             val alpha = (PULSE_MIN_ALPHA + (PULSE_MAX_ALPHA - PULSE_MIN_ALPHA) * pulseProgress).toInt()
             val pulseStroke = borderWidthPx * (1f + PULSE_EXTRA_WIDTH_FACTOR * pulseProgress)
             haloPulsePaint.color = withAlpha(borderColor, alpha)
             haloPulsePaint.strokeWidth = pulseStroke
 
-            val radiusPulse = radiusBase - (pulseStroke - borderWidthPx) * 0.5f // FIX halo circular
+            val radiusPulse = radiusBase - (pulseStroke - borderWidthPx) * 0.5f
             canvas.drawCircle(cx, cy, max(0f, radiusPulse), haloPulsePaint)
         }
 
@@ -435,12 +512,18 @@ class TrackingOverlayView(
                     kmLegend, kmShow, TEXT_COLOR_MAIN
                 )
             }
-            else -> {
+            3 -> {
                 val legend = "oferta"
                 val valStr = parseOfferValue()?.let { "€ " + dfVal.format(it) }
                     ?: offerValueRaw?.let { "€ " + it.replace("€", "").trim() }
                     ?: "€ --"
                 drawSingleLineWithLegend(canvas, cx, cy, radiusBase, legend, valStr)
+            }
+            4 -> {
+                // Página MAPA — rótulo informativo; a abertura é automática após MAP_HOLD_MS
+                val legend = "mapa"
+                val line = "abrir…"
+                drawSingleLineWithLegend(canvas, cx, cy, radiusBase, legend, line)
             }
         }
     }

@@ -1,13 +1,13 @@
 package com.example.smartdriver.map
 
-import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import java.io.File
+import android.Manifest
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.BroadcastReceiver
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.PackageManager
+import android.content.*
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.location.Geocoder
@@ -15,15 +15,12 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
-import android.os.Build
-import android.os.Bundle
-import android.os.CancellationSignal
-import android.os.Handler
-import android.os.Looper
+import android.os.*
 import android.provider.Settings
-import android.util.Log
 import android.text.Html
+import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -35,27 +32,29 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
+import org.json.JSONObject
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
-import java.io.File
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.max
 
-/**
- * Minimapa com OpenStreetMap (OSMDroid):
- *  - Rota real pickup ↔ destino (azul) via OSRM
- *  - Posição atual em tempo real (Fused Location Provider + fallback LocationManager)
- *  - Rota posição atual → alvo (ROXO) [alvo = pickup se existir, senão destino]
- *
- * Evita loops de permissões: só abre Definições quando o utilizador aceitar.
- * Mostra no topo: KMs "até à recolha", "até ao destino", e "total".
- */
+// Zonas
+import com.example.smartdriver.zones.Zone
+import com.example.smartdriver.zones.ZoneRuntime
+import com.example.smartdriver.zones.ZoneType
+import com.example.smartdriver.zones.ZoneRepository
+import com.example.smartdriver.zones.ZonesRenderOverlay
+
 class MapPreviewActivity : Activity() {
 
     companion object {
@@ -69,34 +68,35 @@ class MapPreviewActivity : Activity() {
 
         private const val REQ_LOC = 1001
         private const val REQ_RESOLVE_LOC = 2001
+
+        const val ACTION_SEMAFORO_SHOW_MAP = "com.example.smartdriver.map.ACTION_SEMAFORO_SHOW_MAP"
+        const val ACTION_SEMAFORO_ALPHA    = "com.example.smartdriver.map.ACTION_SEMAFORO_ALPHA"
+        const val ACTION_SEMAFORO_HIDE_MAP = "com.example.smartdriver.map.ACTION_SEMAFORO_HIDE_MAP"
+        const val EXTRA_AUTO_HIDE_MS       = "auto_hide_ms"
+        const val EXTRA_FADE_MS            = "fade_ms"
+        const val EXTRA_ALPHA              = "alpha"
+        const val EXTRA_FULLSCREEN         = "extra_fullscreen"
     }
 
     private lateinit var mapView: MapView
-    private val routeProvider: RouteProvider by lazy { OSRMRouteProvider(userAgent = packageName) }
+    private lateinit var rootCard: FrameLayout
+    private lateinit var statusView: TextView
+    private lateinit var recenterView: TextView
 
-    // Lisboa fallback
-    private val fallbackLisbon = GeoPoint(38.7223, -9.1393)
+    private lateinit var zoneBadge: TextView
+    private var lastZoneId: String? = null
 
-    // Overlays
+    private lateinit var zonesOverlay: ZonesRenderOverlay
+
     private var pickupMarker: Marker? = null
     private var destMarker: Marker? = null
-    private var pickupDestRoute: Polyline? = null          // azul
-    private var currentToTargetRoute: Polyline? = null     // roxo
     private var currentMarker: Marker? = null
-
-    // Rota points guardados para calcular distâncias
+    private var pickupDestRoute: Polyline? = null
+    private var currentToTargetRoute: Polyline? = null
     private var lastPickupDestPoints: List<GeoPoint>? = null
     private var lastCurrentToTargetPoints: List<GeoPoint>? = null
     private var currentRouteTargetIsPickup: Boolean = false
 
-    // Estado
-    @Volatile private var lastSeq = 0
-    @Volatile private var lastLocSeq = 0
-    private var lastRerouteTimeMs = 0L
-    private var lastReroutePoint: GeoPoint? = null
-    private var firstFixCentered = false
-
-    // Localização
     private var fusedClient: FusedLocationProviderClient? = null
     private var fusedCallback: LocationCallback? = null
     private var locationManager: LocationManager? = null
@@ -107,10 +107,61 @@ class MapPreviewActivity : Activity() {
         .setWaitForAccurateLocation(true)
         .build()
 
-    // UI
-    private lateinit var statusView: TextView
-    private lateinit var recenterView: TextView
     private val uiHandler = Handler(Looper.getMainLooper())
+    private var fadeAnimator: ValueAnimator? = null
+    private var autoHideRunnable: Runnable? = null
+
+    private var firstFixCentered = false
+    private var lastRerouteTimeMs = 0L
+    private var lastReroutePoint: GeoPoint? = null
+    @Volatile private var lastSeq = 0
+    @Volatile private var lastLocSeq = 0
+
+    private val fallbackLisbon = GeoPoint(38.7223, -9.1393)
+
+    private var isFullscreen = false
+
+    private val repoListener = object : ZoneRepository.SaveListener {
+        override fun onDirty() { mapView.postInvalidate() }
+        override fun onSaved(success: Boolean) { mapView.postInvalidate() }
+    }
+
+    private val updateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent == null) return
+            updateFromExtras(intent)
+        }
+    }
+
+    private val semaforoReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent == null) return
+            when (intent.action) {
+                ACTION_SEMAFORO_SHOW_MAP -> {
+                    val full = intent.getBooleanExtra(EXTRA_FULLSCREEN, false)
+
+                    if (full) {
+                        applyFullscreenWindow()
+                    } else {
+                        applyDefaultWindow()
+                    }
+
+                    val autoMs = intent.getLongExtra(EXTRA_AUTO_HIDE_MS, 10_000L)
+                    val fadeMs = intent.getLongExtra(EXTRA_FADE_MS, 400L)
+                    showAndAutoHide(autoMs, fadeMs)
+                }
+                ACTION_SEMAFORO_ALPHA -> {
+                    val a = intent.getFloatExtra(EXTRA_ALPHA, 1f).coerceIn(0f, 1f)
+                    setOverlayAlpha(a)
+                }
+                ACTION_SEMAFORO_HIDE_MAP -> {
+                    val fadeMs = intent.getLongExtra(EXTRA_FADE_MS, 400L)
+                    fadeOutAndFinish(fadeMs)
+                }
+            }
+        }
+    }
+
     private val statusTicker = object : Runnable {
         override fun run() {
             updateDistanceBanner()
@@ -118,68 +169,64 @@ class MapPreviewActivity : Activity() {
         }
     }
 
-    private val updateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: Intent?) {
-            if (intent == null) return
-            updateFromExtras(intent)
-        }
-    }
-
-    @SuppressLint("SetTextI18n")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Janela tipo "cartão"
-        val lp = WindowManager.LayoutParams().also {
-            it.copyFrom(window.attributes)
-            it.width = dp(540)
-            it.height = dp(450)
-            it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            it.y = dp(100)
+        // Verifica ANTES de criar a UI se deve ser fullscreen
+        isFullscreen = intent?.getBooleanExtra(EXTRA_FULLSCREEN, false) ?: false
+
+        if (isFullscreen) {
+            applyFullscreenWindow()
+        } else {
+            val lp = WindowManager.LayoutParams().also {
+                it.copyFrom(window.attributes)
+                it.width = dp(360)
+                it.height = dp(300)
+                it.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                it.y = dp(180)
+            }
+            window.attributes = lp
         }
-        window.attributes = lp
-        /* no dimming behind map */
+
         setFinishOnTouchOutside(true)
-        // Ensure no dimming behind this window
         window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         window.setDimAmount(0f)
 
-        // UI base
-        val root = FrameLayout(this).apply {
+        rootCard = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            elevation = dp(12).toFloat()
-            background = roundedCardBackground()
+            if (!isFullscreen) {
+                elevation = dp(12).toFloat()
+                background = roundedCardBackground()
+            }
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
 
         val topBar = LinearLayout(this).apply {
-            setPadding(dp(12), dp(12), dp(12), dp(8))
+            setPadding(dp(12), dp(10), dp(12), dp(6))
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-
-        val titleView = TextView(this).apply {
+        val title = TextView(this).apply {
             text = ""
             setTextColor(Color.parseColor("#222222"))
             textSize = 15f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             maxLines = 1
         }
-
         recenterView = TextView(this).apply {
-            text = "Centrar em mim"
+            text = "Centrar"
             setTextColor(Color.parseColor("#1976D2"))
             textSize = 14f
             setPadding(dp(10), dp(6), dp(10), dp(6))
             background = pill(Color.parseColor("#E3F2FD"))
             setOnClickListener { centerOnMe() }
         }
-
         val closeView = TextView(this).apply {
             text = "Fechar"
             setTextColor(Color.parseColor("#1976D2"))
@@ -187,8 +234,7 @@ class MapPreviewActivity : Activity() {
             setPadding(dp(10), dp(6), dp(10), dp(6))
             setOnClickListener { finish() }
         }
-
-        topBar.addView(titleView)
+        topBar.addView(title)
         topBar.addView(recenterView)
         topBar.addView(closeView)
 
@@ -196,11 +242,10 @@ class MapPreviewActivity : Activity() {
             text = "—"
             setTextColor(Color.parseColor("#555555"))
             textSize = 12f
-            setPadding(dp(12), 0, dp(12), dp(8))
+            setPadding(dp(12), 0, dp(12), dp(6))
         }
 
-        // OSMDroid
-        val base = File(filesDir, "osmdroid").apply { mkdirs() }
+        val base = getDir("osmdroid", MODE_PRIVATE)
         val tileCache = File(cacheDir, "osmdroid/tiles").apply { mkdirs() }
         Configuration.getInstance().apply {
             userAgentValue = packageName
@@ -211,10 +256,37 @@ class MapPreviewActivity : Activity() {
         mapView = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
+        }
+
+        val mapFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
             )
         }
+        mapFrame.addView(
+            mapView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        zoneBadge = TextView(this).apply {
+            visibility = View.GONE
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = pill(Color.parseColor("#B71C1C"))
+        }
+        mapFrame.addView(
+            zoneBadge,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                leftMargin = dp(10); topMargin = dp(10)
+            }
+        )
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -224,46 +296,46 @@ class MapPreviewActivity : Activity() {
             )
             addView(topBar)
             addView(statusView)
-            addView(mapView)
+            addView(mapFrame)
         }
 
-        root.addView(content)
-        setContentView(root)
+        rootCard.addView(content)
+        setContentView(rootCard)
 
-        // Estado inicial
         mapView.controller.setZoom(12.0)
         mapView.controller.setCenter(fallbackLisbon)
 
-        // Primeira oferta
+        // ZONAS (cores)
+        ZoneRepository.init(applicationContext)
+        ZoneRepository.addListener(repoListener)
+        zonesOverlay = ZonesRenderOverlay(this)
+        mapView.overlays.add(0, zonesOverlay)
+
         intent?.let { updateFromExtras(it) }
 
-        // Location infra
         fusedClient = runCatching { LocationServices.getFusedLocationProviderClient(this) }.getOrNull()
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
 
-        // Pedir permissões / arrancar
         requestLocationPermissionIfNeeded()
-
-        // Atualização periódica do banner
         uiHandler.post(statusTicker)
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        if (intent != null) updateFromExtras(intent)
     }
 
     override fun onStart() {
         super.onStart()
         registerReceiver(updateReceiver, IntentFilter(ACTION_UPDATE_MAP))
+        val f = IntentFilter().apply {
+            addAction(ACTION_SEMAFORO_SHOW_MAP)
+            addAction(ACTION_SEMAFORO_ALPHA)
+            addAction(ACTION_SEMAFORO_HIDE_MAP)
+        }
+        registerReceiver(semaforoReceiver, f)
     }
 
     override fun onStop() {
         runCatching { unregisterReceiver(updateReceiver) }
+        runCatching { unregisterReceiver(semaforoReceiver) }
         super.onStop()
     }
-
-    // ---------- Ofertas (rota azul) ----------
 
     private fun updateFromExtras(intent: Intent) {
         val seq = ++lastSeq
@@ -272,7 +344,6 @@ class MapPreviewActivity : Activity() {
         val pLon = intent.getDoubleExtra(EXTRA_PICKUP_LON, Double.NaN)
         val dLat = intent.getDoubleExtra(EXTRA_DEST_LAT,   Double.NaN)
         val dLon = intent.getDoubleExtra(EXTRA_DEST_LON,   Double.NaN)
-
         val pickupAddr = intent.getStringExtra(EXTRA_PICKUP_ADDRESS)
         val destAddr   = intent.getStringExtra(EXTRA_DEST_ADDRESS)
 
@@ -294,10 +365,10 @@ class MapPreviewActivity : Activity() {
             runOnUiThread { drawMarkersAndCenter(pickup, dest) }
 
             if (pickup != null && dest != null) {
-                val route = routeProvider.getRoute(pickup, dest)
+                val points = requestRoutePoints(pickup, dest)
                 if (seq != lastSeq) return@thread
                 runOnUiThread {
-                    if (!route.isNullOrEmpty()) drawPickupDestRoute(route) else drawPickupDestFallback(pickup, dest)
+                    if (points != null) drawPickupDestRoute(points) else drawPickupDestFallback(pickup, dest)
                 }
             } else {
                 runOnUiThread { clearPickupDestRoute() }
@@ -365,7 +436,7 @@ class MapPreviewActivity : Activity() {
         pickupDestRoute = Polyline().apply {
             setPoints(points)
             outlinePaint.strokeWidth = 7f
-            outlinePaint.color = Color.parseColor("#2E7D32") // azul
+            outlinePaint.color = Color.parseColor("#2E7D32")
         }.also { mapView.overlays.add(it) }
         mapView.invalidate()
         updateDistanceBanner()
@@ -377,7 +448,7 @@ class MapPreviewActivity : Activity() {
         pickupDestRoute = Polyline().apply {
             setPoints(lastPickupDestPoints)
             outlinePaint.strokeWidth = 6f
-            outlinePaint.color = Color.BLUE
+            outlinePaint.color = Color.GREEN
         }.also { mapView.overlays.add(it) }
         mapView.invalidate()
         updateDistanceBanner()
@@ -390,8 +461,6 @@ class MapPreviewActivity : Activity() {
         mapView.invalidate()
         updateDistanceBanner()
     }
-
-    // ---------- Localização / rota roxa ----------
 
     private fun hasLocationPermission(): Boolean {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -452,14 +521,11 @@ class MapPreviewActivity : Activity() {
             try {
                 startActivity(i)
                 return
-            } catch (e: Exception) {
-                // tenta o próximo
-            }
+            } catch (e: Exception) { }
         }
         Toast.makeText(this, "Abra as Definições do sistema e dê permissão de localização à app.", Toast.LENGTH_LONG).show()
     }
 
-    /** Verifica definições e inicia updates. */
     private fun ensureLocationSettingsAndStart() {
         if (!hasLocationPermission()) {
             requestLocationPermissionIfNeeded()
@@ -481,10 +547,8 @@ class MapPreviewActivity : Activity() {
             .addOnSuccessListener { startFusedUpdates() }
             .addOnFailureListener { ex ->
                 if (ex is ResolvableApiException) {
-                    try { ex.startResolutionForResult(this, REQ_RESOLVE_LOC) }
-                    catch (_: Exception) { /* ignorar */ }
+                    try { ex.startResolutionForResult(this, REQ_RESOLVE_LOC) } catch (_: Exception) {}
                 }
-                // Em qualquer caso, arrancar fallback também
                 startLocationManagerUpdates()
             }
     }
@@ -492,13 +556,11 @@ class MapPreviewActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_RESOLVE_LOC) {
-            // Tentar ambos; o que responder fica
             startFusedUpdates()
             startLocationManagerUpdates()
         }
     }
 
-    // Fused
     @SuppressLint("MissingPermission")
     private fun startFusedUpdates() {
         val client = fusedClient ?: return
@@ -515,7 +577,6 @@ class MapPreviewActivity : Activity() {
 
         client.requestLocationUpdates(locationRequest, fusedCallback!!, mainLooper)
 
-        // Arranque rápido
         val token = CancellationTokenSource()
         client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, token.token)
             .addOnSuccessListener { it?.let { onNewLocation(it) } }
@@ -527,14 +588,11 @@ class MapPreviewActivity : Activity() {
         fusedCallback?.let { cb -> runCatching { fusedClient?.removeLocationUpdates(cb) } }
     }
 
-    // LocationManager
     @SuppressLint("MissingPermission")
     private fun startLocationManagerUpdates() {
         if (!hasLocationPermission()) return
-
         if (locationManager == null) locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
 
-        // Não abrir definições automaticamente — apenas informar
         if (!providersEnabled()) {
             Toast.makeText(this, "Ative Localização (GPS/Wi-Fi) para melhor precisão.", Toast.LENGTH_SHORT).show()
         }
@@ -598,7 +656,7 @@ class MapPreviewActivity : Activity() {
                 currentMarker = Marker(mapView).apply {
                     position = here
                     title = "Posição atual"
-                    setIcon(solidDot(Color.parseColor("#8E24AA"))) // roxo para combinar com a rota
+                    setIcon(solidDot(Color.parseColor("#8E24AA")))
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 }.also { mapView.overlays.add(it) }
             } else {
@@ -610,6 +668,9 @@ class MapPreviewActivity : Activity() {
                 mapView.controller.setZoom(15.0)
                 mapView.controller.setCenter(here)
             }
+
+            ZoneRuntime.updatePosition(here.latitude, here.longitude)
+            updateZoneBadge(ZoneRuntime.current())
 
             mapView.invalidate()
         }
@@ -627,9 +688,9 @@ class MapPreviewActivity : Activity() {
         currentRouteTargetIsPickup = (pickup != null)
 
         thread {
-            val route = routeProvider.getRoute(here, target)
+            val points = requestRoutePoints(here, target) ?: listOf(here, target)
             if (seq != lastLocSeq) return@thread
-            runOnUiThread { drawCurrentToTargetRoute(route ?: listOf(here, target)) }
+            runOnUiThread { drawCurrentToTargetRoute(points) }
         }
     }
 
@@ -652,8 +713,8 @@ class MapPreviewActivity : Activity() {
         }
 
         thread {
-            val route = routeProvider.getRoute(here, target)
-            runOnUiThread { drawCurrentToTargetRoute(route ?: listOf(here, target)) }
+            val points = requestRoutePoints(here, target) ?: listOf(here, target)
+            runOnUiThread { drawCurrentToTargetRoute(points) }
         }
     }
 
@@ -663,26 +724,77 @@ class MapPreviewActivity : Activity() {
         currentToTargetRoute = Polyline().apply {
             setPoints(points)
             outlinePaint.strokeWidth = 7f
-            // Purple if target is pickup; Green if target is destination
             outlinePaint.color = if (currentRouteTargetIsPickup) Color.parseColor("#8E24AA") else Color.parseColor("#2E7D32")
         }.also { mapView.overlays.add(it) }
         mapView.invalidate()
         updateDistanceBanner()
     }
 
-    // ---------- Distâncias ----------
+    // ---------- badge nome da zona ----------
+    private fun updateZoneBadge(zone: Zone?) {
+        if (zone == null) {
+            if (zoneBadge.visibility != View.GONE) zoneBadge.visibility = View.GONE
+            lastZoneId = null
 
+            // Persistir & notificar semáforo (UNKNOWN)
+            getSharedPreferences("smartdriver_map_state", MODE_PRIVATE)
+                .edit().putString("last_zone_kind", "UNKNOWN").apply()
+            sendBroadcast(
+                Intent("com.example.smartdriver.overlay.ACTION_ZONE_HINT").apply {
+                    setPackage(packageName)
+                    putExtra("zone_kind", "UNKNOWN")
+                }
+            )
+            return
+        }
+        if (zone.id == lastZoneId && zoneBadge.visibility == View.VISIBLE) return
+
+        zoneBadge.text = when (zone.type) {
+            ZoneType.NO_GO      -> "🚫 ${zone.name}"
+            ZoneType.SOFT_AVOID -> "⚠️ ${zone.name}"
+            ZoneType.PREFERRED  -> "✅ ${zone.name}"
+        }
+        val bg = when (zone.type) {
+            ZoneType.NO_GO      -> Color.parseColor("#CCB71C1C")
+            ZoneType.SOFT_AVOID -> Color.parseColor("#CCE65100")
+            ZoneType.PREFERRED  -> Color.parseColor("#CC2E7D32")
+        }
+        zoneBadge.background = pill(bg)
+        zoneBadge.visibility = View.VISIBLE
+        lastZoneId = zone.id
+
+        // Persistir & notificar semáforo (mapa → overlay)
+        // Nota: o Overlay atual interpreta "NO_GO" / "PREFERRED" / "NEUTRAL".
+        val kind = when (zone.type) {
+            ZoneType.NO_GO      -> "NO_GO"
+            ZoneType.SOFT_AVOID -> "NEUTRAL"   // mapeado para neutro no semáforo atual
+            ZoneType.PREFERRED  -> "PREFERRED"
+        }
+        getSharedPreferences("smartdriver_map_state", MODE_PRIVATE)
+            .edit().putString("last_zone_kind", kind).apply()
+
+        sendBroadcast(
+            Intent("com.example.smartdriver.overlay.ACTION_ZONE_HINT").apply {
+                setPackage(packageName)
+                putExtra("zone_kind", kind)
+            }
+        )
+    }
+
+    // ================== Distâncias / banner ==================
     private fun updateDistanceBanner() {
         val here = currentMarker?.position
         val pickup = pickupMarker?.position
         val dest = destMarker?.position
 
-        // Distância pickup↔destino (independente da posição atual)
+        // zona do pickup/destino (para mostrar os emojis nas labels)
+        val pickupZone = pickup?.let { ZoneRuntime.firstZoneMatch(it.latitude, it.longitude) }
+        val destZone   = dest?.let   { ZoneRuntime.firstZoneMatch(it.latitude, it.longitude) }
+
         val dPickDestMeters: Double? = if (pickup != null && dest != null) {
             lastPickupDestPoints?.let { polylineLengthMeters(it) } ?: distanceMeters(pickup, dest)
         } else null
 
-        // Distância atual→pickup (preferir rota roxa quando o alvo é pickup)
         val dCurToPickMeters: Double? = if (here != null && pickup != null) {
             if (currentRouteTargetIsPickup && !lastCurrentToTargetPoints.isNullOrEmpty())
                 polylineLengthMeters(lastCurrentToTargetPoints!!)
@@ -690,9 +802,6 @@ class MapPreviewActivity : Activity() {
                 distanceMeters(here, pickup)
         } else null
 
-        // Total:
-        // - com pickup: soma (atual→pickup) + (pickup→destino)
-        // - sem pickup: atual→destino (preferir rota roxa se o alvo for o destino)
         val totalMeters: Double? = if (pickup != null) {
             val a = dCurToPickMeters; val b = dPickDestMeters
             if (a != null && b != null) a + b else null
@@ -705,17 +814,25 @@ class MapPreviewActivity : Activity() {
             } else null
         }
 
-        // O que mostrar em “Até destino”:
-        // - com pickup: SEMPRE pickup→destino
-        // - sem pickup: posição→destino (igual ao total)
         val destDisplayMeters: Double? = if (pickup != null) dPickDestMeters else totalMeters
 
-        statusView.text = android.text.Html.fromHtml(
-            "Até recolha: <b><font color='#8E24AA'>" + formatKm(dCurToPickMeters) + "</font></b> &nbsp;&nbsp; " +
-                    "Até destino: <b><font color='#2E7D32'>" + formatKm(destDisplayMeters) + "</font></b> &nbsp;&nbsp; " +
-                    "Total: <b>" + formatKm(totalMeters) + "</b>",
-            android.text.Html.FROM_HTML_MODE_LEGACY
+        val pickupEmoji = emojiForZone(pickupZone)
+        val destEmoji   = emojiForZone(destZone)
+
+        statusView.text = Html.fromHtml(
+            // emojis junto às labels:
+            "$pickupEmoji Até recolha: <b><font color='#8E24AA'>${formatKm(dCurToPickMeters)}</font></b> &nbsp;&nbsp; " +
+                    "$destEmoji Até destino: <b><font color='#2E7D32'>${formatKm(destDisplayMeters)}</font></b> &nbsp;&nbsp; " +
+                    "Total: <b>${formatKm(totalMeters)}</b>",
+            Html.FROM_HTML_MODE_LEGACY
         )
+    }
+
+    private fun emojiForZone(zone: Zone?): String = when (zone?.type) {
+        ZoneType.NO_GO      -> "🚫"
+        ZoneType.SOFT_AVOID -> "⚠️"
+        ZoneType.PREFERRED  -> "✅"
+        else -> ""
     }
 
     private fun polylineLengthMeters(points: List<GeoPoint>): Double {
@@ -728,14 +845,6 @@ class MapPreviewActivity : Activity() {
         }
         return sum
     }
-
-    private fun formatKm(meters: Double?): String {
-        if (meters == null || meters.isNaN()) return "—"
-        val km = meters / 1000.0
-        return String.format(Locale.US, "%.1f km", km)
-    }
-
-    // ---------- helpers ----------
 
     private fun distanceMeters(a: GeoPoint, b: GeoPoint): Double {
         val R = 6371000.0
@@ -750,12 +859,187 @@ class MapPreviewActivity : Activity() {
         return R * c
     }
 
+    private fun formatKm(meters: Double?): String {
+        if (meters == null || meters.isNaN()) return "—"
+        if (meters < 1000.0) return "${meters.toInt()} m"
+        val km = meters / 1000.0
+        return String.format(Locale.US, "%.1f km", km)
+    }
+
+    private fun requestRoutePoints(from: GeoPoint, to: GeoPoint): List<GeoPoint>? {
+        val url = "https://router.project-osrm.org/route/v1/driving/" +
+                "${from.longitude},${from.latitude};${to.longitude},${to.latitude}" +
+                "?alternatives=false&steps=false&overview=full&geometries=polyline6"
+        return try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", packageName)
+                connectTimeout = 8000
+                readTimeout = 8000
+            }
+            conn.inputStream.use { `is` ->
+                val text = BufferedReader(InputStreamReader(`is`)).readText()
+                val json = JSONObject(text)
+                if (json.optString("code") != "Ok") return null
+                val routes = json.getJSONArray("routes")
+                if (routes.length() == 0) return null
+                val r0 = routes.getJSONObject(0)
+                val geometry = r0.getString("geometry")
+                decodePolyline6(geometry)
+            }
+        } catch (e: Exception) {
+            Log.e("MapPreviewActivity", "OSRM falhou: ${e.message}")
+            null
+        }
+    }
+
+    private fun decodePolyline6(encoded: String): List<GeoPoint> {
+        val out = ArrayList<GeoPoint>()
+        var index = 0
+        val len = encoded.length
+        var lat = 0L
+        var lon = 0L
+        while (index < len) {
+            var b: Int
+            var shift = 0
+            var result = 0L
+            do {
+                b = encoded[index++].code - 63
+                result = result or ((b and 0x1F).toLong() shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dlat = if ((result and 1L) != 0L) -(result shr 1) else (result shr 1)
+            lat += dlat
+
+            shift = 0
+            result = 0
+            do {
+                b = encoded[index++].code - 63
+                result = result or ((b and 0x1F).toLong() shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dlon = if ((result and 1L) != 0L) -(result shr 1) else (result shr 1)
+            lon += dlon
+
+            out.add(GeoPoint(lat / 1e6, lon / 1e6))
+        }
+        return out
+    }
+
+    private fun setOverlayAlpha(a: Float) {
+        fadeAnimator?.cancel()
+        autoHideRunnable?.let { uiHandler.removeCallbacks(it) }
+        rootCard.alpha = a.coerceIn(0f, 1f)
+    }
+
+    // ===== Tamanho da janela (mini vs fullscreen) =====
+    private fun applyFullscreenWindow() {
+        isFullscreen = true
+
+        val lp = WindowManager.LayoutParams().also {
+            it.copyFrom(window.attributes)
+            it.width = ViewGroup.LayoutParams.MATCH_PARENT
+            it.height = ViewGroup.LayoutParams.MATCH_PARENT
+            it.gravity = Gravity.TOP or Gravity.START
+            it.x = 0
+            it.y = 0
+            // Adiciona flags importantes para fullscreen
+            it.flags = it.flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        }
+        window.attributes = lp
+
+        // Modo fullscreen mais agressivo
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_FULLSCREEN
+                            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    )
+        }
+
+        // Remove o background arredondado quando fullscreen
+        rootCard.background = null
+        rootCard.elevation = 0f
+    }
+
+    private fun applyDefaultWindow() {
+        isFullscreen = false
+
+        val lp = WindowManager.LayoutParams().also {
+            it.copyFrom(window.attributes)
+            it.width = dp(360)
+            it.height = dp(300)
+            it.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            it.x = 0
+            it.y = dp(180)
+            // Remove flags de fullscreen
+            it.flags = it.flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS.inv()
+        }
+        window.attributes = lp
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        }
+
+        // Restaura o background arredondado
+        rootCard.background = roundedCardBackground()
+        rootCard.elevation = dp(12).toFloat()
+    }
+
+    private fun showAndAutoHide(visibleMs: Long, fadeMs: Long) {
+        fadeAnimator?.cancel()
+        autoHideRunnable?.let { uiHandler.removeCallbacks(it) }
+        rootCard.alpha = 1f
+        rootCard.visibility = View.VISIBLE
+        autoHideRunnable = Runnable { fadeOutAndFinish(fadeMs) }
+        uiHandler.postDelayed(autoHideRunnable!!, visibleMs.coerceAtLeast(0L))
+    }
+
+    private fun fadeOutAndFinish(fadeMs: Long) {
+        fadeAnimator?.cancel()
+        if (fadeMs <= 0L) { finish(); return }
+        val start = rootCard.alpha
+        val anim = ValueAnimator.ofFloat(start, 0f).apply {
+            duration = fadeMs
+            addUpdateListener { va -> rootCard.alpha = (va.animatedValue as Float) }
+            addListener(object : android.animation.Animator.AnimatorListener {
+                override fun onAnimationStart(animation: android.animation.Animator) {}
+                override fun onAnimationEnd(animation: android.animation.Animator) { finish() }
+                override fun onAnimationCancel(animation: android.animation.Animator) {}
+                override fun onAnimationRepeat(animation: android.animation.Animator) {}
+            })
+        }
+        fadeAnimator = anim
+        anim.start()
+    }
+
+    private fun centerOnMe() {
+        val here = currentMarker?.position
+        if (here != null) {
+            mapView.controller.setZoom(16.0)
+            mapView.controller.setCenter(here)
+        } else {
+            Toast.makeText(this, "Sem posição ainda. A tentar obter…", Toast.LENGTH_SHORT).show()
+            ensureLocationSettingsAndStart()
+        }
+    }
+
     private fun roundedCardBackground(): GradientDrawable = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = dp(16).toFloat()
         setColor(Color.WHITE)
         setStroke(dp(1), Color.parseColor("#22000000"))
     }
+
     private fun pill(bg: Int): GradientDrawable = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = dp(18).toFloat()
@@ -770,20 +1054,6 @@ class MapPreviewActivity : Activity() {
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-
-
-    // ---------- UI action ----------
-    private fun centerOnMe() {
-        val here = currentMarker?.position
-        if (here != null) {
-            mapView.controller.setZoom(16.0)
-            mapView.controller.setCenter(here)
-        } else {
-            Toast.makeText(this, "Sem posição ainda. A tentar obter…", Toast.LENGTH_SHORT).show()
-            ensureLocationSettingsAndStart()
-        }
-    }
-    // --- ciclo de vida
 
     override fun onResume() {
         super.onResume()
@@ -805,10 +1075,10 @@ class MapPreviewActivity : Activity() {
         stopLocationUpdates()
         mapView.onDetach()
         uiHandler.removeCallbacks(statusTicker)
+        runCatching { ZoneRepository.removeListener(repoListener) }
         super.onDestroy()
     }
 
-    /** ÚNICA função para parar *todos* os updates de localização. */
     private fun stopLocationUpdates() {
         fusedCallback?.let { runCatching { fusedClient?.removeLocationUpdates(it) } }
         runCatching { locationManager?.removeUpdates(locListener) }

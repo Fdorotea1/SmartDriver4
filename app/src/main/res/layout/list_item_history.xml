@@ -1,97 +1,143 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:paddingTop="10dp"
-    android:paddingBottom="10dp"
-    android:paddingEnd="16dp"
-    android:paddingStart="0dp"> <!-- Padding Start zerado -->
+    android:layout_marginStart="12dp"
+    android:layout_marginEnd="12dp"
+    android:layout_marginTop="8dp"
+    android:layout_marginBottom="8dp"
+    app:cardUseCompatPadding="true"
+    app:cardCornerRadius="14dp"
+    app:cardElevation="4dp">
 
-    <!-- Barra Indicadora Lateral -->
-    <View
-        android:id="@+id/view_rating_indicator"
-        android:layout_width="6dp"
-        android:layout_height="0dp"
-        android:background="@color/history_indicator_unknown"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <!-- Content Views (Alinhados à Direita da Barra) -->
-    <TextView
-        android:id="@+id/textViewStartTime"
-        android:layout_width="0dp"
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="8dp"
-        android:textAppearance="?attr/textAppearanceListItemSmall"
-        android:textColor="?android:attr/textColorSecondary"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@id/view_rating_indicator"
-        app:layout_constraintTop_toTopOf="parent"
-        tools:text="Início: 26/04 10:30" />
+        android:paddingStart="0dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp">
 
-    <TextView
-        android:id="@+id/textViewDuration"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textAppearance="?attr/textAppearanceListItem"
-        app:layout_constraintStart_toStartOf="@+id/textViewStartTime"
-        app:layout_constraintTop_toBottomOf="@+id/textViewStartTime"
-        tools:text="Duração: 15m 30s" />
+        <!-- Barra Indicadora Lateral (mais larga e viva) -->
+        <View
+            android:id="@+id/view_rating_indicator"
+            android:layout_width="10dp"
+            android:layout_height="0dp"
+            android:background="@color/history_indicator_unknown"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
 
-    <TextView
-        android:id="@+id/textViewOfferValue"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="16dp"
-        android:textAppearance="?attr/textAppearanceListItem"
-        android:textStyle="bold"
-        app:layout_constraintBaseline_toBaselineOf="@+id/textViewDuration"
-        app:layout_constraintStart_toEndOf="@+id/textViewDuration"
-        tools:text="Valor: 10.50 €" />
+        <!-- Topo: Data/Hora à esquerda -->
+        <TextView
+            android:id="@+id/textViewStartTime"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="8dp"
+            android:textAppearance="?attr/textAppearanceListItemSmall"
+            android:textColor="?android:attr/textColorSecondary"
+            app:layout_constraintEnd_toStartOf="@+id/textViewOfferValue"
+            app:layout_constraintStart_toEndOf="@id/view_rating_indicator"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_goneMarginEnd="8dp"
+            tools:text="Início: 26/04 10:30" />
 
-    <TextView
-        android:id="@+id/textViewFinalVph"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textAppearance="?attr/textAppearanceListItemSecondary"
-        app:layout_constraintStart_toStartOf="@+id/textViewDuration"
-        app:layout_constraintTop_toBottomOf="@+id/textViewDuration"
-        tools:text="€/h Real: 18.5" />
+        <!-- Topo: Valor forte à direita -->
+        <TextView
+            android:id="@+id/textViewOfferValue"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textStyle="bold"
+            android:textSize="16sp"
+            app:layout_constraintTop_toTopOf="@+id/textViewStartTime"
+            app:layout_constraintEnd_toEndOf="parent"
+            tools:text="Valor: 10,50 €" />
 
-    <TextView
-        android:id="@+id/textViewInitialVpk"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="16dp"
-        android:textAppearance="?attr/textAppearanceListItemSecondary"
-        app:layout_constraintBaseline_toBaselineOf="@+id/textViewFinalVph"
-        app:layout_constraintStart_toEndOf="@+id/textViewFinalVph"
-        tools:text="€/km Ini: 1.20" />
+        <!-- Linha 2: Duração + Tipo de Serviço à direita (se existir) -->
+        <TextView
+            android:id="@+id/textViewDuration"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textAppearance="?attr/textAppearanceListItem"
+            app:layout_constraintStart_toStartOf="@+id/textViewStartTime"
+            app:layout_constraintTop_toBottomOf="@+id/textViewStartTime"
+            app:layout_constraintEnd_toStartOf="@+id/textViewServiceType"
+            tools:text="Duração: 15m 30s" />
 
-    <TextView
-        android:id="@+id/textViewInitialDistance"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:textAppearance="?attr/textAppearanceListItemSecondary"
-        app:layout_constraintStart_toStartOf="@+id/textViewFinalVph"
-        app:layout_constraintTop_toBottomOf="@+id/textViewFinalVph"
-        tools:text="Dist Ini: 8.5 km" />
+        <TextView
+            android:id="@+id/textViewServiceType"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:textAppearance="?attr/textAppearanceListItem"
+            android:textStyle="bold"
+            app:layout_constraintBaseline_toBaselineOf="@+id/textViewDuration"
+            app:layout_constraintEnd_toEndOf="parent"
+            tools:text="UberX" />
 
-    <TextView
-        android:id="@+id/textViewServiceType"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="16dp"
-        android:textAppearance="?attr/textAppearanceListItemSecondary"
-        app:layout_constraintBaseline_toBaselineOf="@+id/textViewInitialDistance"
-        app:layout_constraintStart_toEndOf="@+id/textViewInitialDistance"
-        tools:text="UberX" />
+        <!-- Linha 3: Métricas (€/h, €/km, Dist) -->
+        <TextView
+            android:id="@+id/textViewFinalVph"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textAppearance="?attr/textAppearanceListItemSmall"
+            android:textStyle="bold"
+            app:layout_constraintStart_toStartOf="@+id/textViewDuration"
+            app:layout_constraintTop_toBottomOf="@+id/textViewDuration"
+            tools:text="€/h Real: 18,5" />
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+        <TextView
+            android:id="@+id/textViewInitialVpk"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:textAppearance="?attr/textAppearanceListItemSmall"
+            app:layout_constraintBaseline_toBaselineOf="@+id/textViewFinalVph"
+            app:layout_constraintStart_toEndOf="@+id/textViewFinalVph"
+            tools:text="€/km Ini: 1,20" />
+
+        <TextView
+            android:id="@+id/textViewInitialDistance"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:textAppearance="?attr/textAppearanceListItemSmall"
+            app:layout_constraintBaseline_toBaselineOf="@+id/textViewFinalVph"
+            app:layout_constraintStart_toEndOf="@+id/textViewInitialVpk"
+            tools:text="Dist: 8,5 km" />
+
+        <!-- Linha 4: Origem -->
+        <TextView
+            android:id="@+id/textViewPickupAddress"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textAppearance="?attr/textAppearanceListItemSmall"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="@+id/textViewFinalVph"
+            app:layout_constraintTop_toBottomOf="@+id/textViewFinalVph"
+            tools:text="Origem: Rua da Junqueira 123, Lisboa" />
+
+        <!-- Linha 5: Destino -->
+        <TextView
+            android:id="@+id/textViewDropoffAddress"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textAppearance="?attr/textAppearanceListItemSmall"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="@+id/textViewPickupAddress"
+            app:layout_constraintTop_toBottomOf="@+id/textViewPickupAddress"
+            app:layout_constraintBottom_toBottomOf="parent"
+            tools:text="Destino: Praça do Comércio, Lisboa" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</androidx.cardview.widget.CardView>

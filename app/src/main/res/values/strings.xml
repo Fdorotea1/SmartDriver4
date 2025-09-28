@@ -93,4 +93,15 @@
     <string name="error_check_marked_fields">Verifique os campos marcados.</string>
 
     <string name="settings_saved">Configurações salvas!</string>
+
+    <!-- ========================= -->
+    <!-- Editor de Zonas (no-go)  -->
+    <!-- ========================= -->
+    <string name="map_editor_title">Editor de Zonas</string>
+    <string name="map_editor_action_save">Guardar</string>
+    <string name="map_editor_action_clear">Apagar</string>
+    <string name="map_editor_action_help">Ajuda</string>
+    <string name="map_editor_save_placeholder">Nada para guardar (Passos 3/7 tratam da persistência)</string>
+    <string name="map_editor_clear_placeholder">Sem desenho ainda (Passo 4 tratará do polígono)</string>
+    <string name="map_editor_help_text">Aqui vais desenhar e gerir zonas no-go. Nesta fase inicial, usa a toolbar. O desenho chega no Passo 4.</string>
 </resources>

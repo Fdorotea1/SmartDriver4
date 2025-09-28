@@ -6,14 +6,15 @@ import kotlinx.parcelize.Parcelize
 import java.util.UUID
 
 /**
- * Extensão do modelo para permitir associar screenshots ao histórico.
- * - tripId: identificador estável da viagem (gera UUID por omissão para compatibilidade com JSON antigo).
- * - screenshotPaths: lista de caminhos absolutos (armazenados em storage privado da app).
+ * Modelo de histórico de viagem.
+ * - tripId: identificador estável da viagem (gera UUID por omissão para compat com JSON antigo).
+ * - screenshotPaths: caminhos absolutos das screenshots associadas (armazenadas no storage privado da app).
+ * - pickupAddress / dropoffAddress: moradas (se captadas), opcionais para manter compatibilidade.
  */
 @Keep
 @Parcelize
 data class TripHistoryEntry(
-    // NOVO: identificador único da viagem (usado para indexar screenshots)
+    // Identificador único da viagem (usado para indexar screenshots)
     val tripId: String = UUID.randomUUID().toString(),
 
     val startTimeMillis: Long,
@@ -33,13 +34,17 @@ data class TripHistoryEntry(
     // Metadados
     val serviceType: String?,
 
-    // Compatibilidade com histórico antigo: se não existir no JSON antigo, fica null e tratamos como GRAY
+    // NOVO: moradas (opcional para compatibilidade com histórico antigo)
+    val pickupAddress: String? = null,
+    val dropoffAddress: String? = null,
+
+    // Compatibilidade com histórico antigo: se não existir no JSON antigo, fica GRAY
     val originalBorderRating: BorderRating = BorderRating.GRAY,
 
-    // NOVO: valor efetivo após ajustes (gorjetas, espera, correção manual, etc.)
+    // Valor efetivo após ajustes (gorjetas, espera, correção manual, etc.)
     // Se não estiver presente (entradas antigas), fica null — o app usa offerValue como fallback.
     val effectiveValue: Double? = null,
 
-    // NOVO: caminhos das screenshots associadas a esta viagem (pode ficar vazio nas entradas antigas)
+    // Caminhos das screenshots associadas a esta viagem (pode ficar vazio nas entradas antigas)
     val screenshotPaths: List<String> = emptyList()
 ) : Parcelable

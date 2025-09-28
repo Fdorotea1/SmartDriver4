@@ -47,152 +47,7 @@
             android:layout_marginTop="12dp"
             android:background="@color/gray_divider" />
 
-        <!-- Permissões -->
-        <TextView
-            android:id="@+id/permissionsTitleTextView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Permissões Necessárias"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/black" />
-
-        <!-- CARD: Acessibilidade -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            app:cardCornerRadius="16dp"
-            app:cardUseCompatPadding="true">
-
-            <androidx.constraintlayout.widget.ConstraintLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="56dp"
-                android:paddingStart="16dp"
-                android:paddingEnd="12dp"
-                android:paddingTop="12dp"
-                android:paddingBottom="12dp">
-
-                <TextView
-                    android:id="@+id/accessibilityStatusTextView"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:text="1. Acessibilidade"
-                    android:textColor="@color/black"
-                    android:textSize="16sp"
-                    app:layout_constraintStart_toStartOf="parent"
-                    app:layout_constraintEnd_toStartOf="@+id/accessibilityPermSwitch"
-                    app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    app:layout_goneMarginEnd="12dp" />
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/accessibilityPermSwitch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    app:layout_constraintEnd_toEndOf="parent"
-                    app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    app:thumbTint="@color/switch_thumb_selector"
-                    app:trackTint="@color/switch_track_selector" />
-            </androidx.constraintlayout.widget.ConstraintLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- CARD: Overlay -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            app:cardCornerRadius="16dp"
-            app:cardUseCompatPadding="true">
-
-            <androidx.constraintlayout.widget.ConstraintLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="56dp"
-                android:paddingStart="16dp"
-                android:paddingEnd="12dp"
-                android:paddingTop="12dp"
-                android:paddingBottom="12dp">
-
-                <TextView
-                    android:id="@+id/overlayStatusTextView"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:text="2. Overlay"
-                    android:textColor="@color/black"
-                    android:textSize="16sp"
-                    app:layout_constraintStart_toStartOf="parent"
-                    app:layout_constraintEnd_toStartOf="@+id/overlayPermSwitch"
-                    app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    app:layout_goneMarginEnd="12dp" />
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/overlayPermSwitch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    app:layout_constraintEnd_toEndOf="parent"
-                    app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    app:thumbTint="@color/switch_thumb_selector"
-                    app:trackTint="@color/switch_track_selector" />
-            </androidx.constraintlayout.widget.ConstraintLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <!-- CARD: Captura (apenas estado; sem switch) -->
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            app:cardCornerRadius="16dp"
-            app:cardUseCompatPadding="true">
-
-            <androidx.constraintlayout.widget.ConstraintLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="56dp"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:paddingTop="12dp"
-                android:paddingBottom="12dp">
-
-                <TextView
-                    android:id="@+id/captureStatusLabel"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:text="3. Captura"
-                    android:textColor="@color/black"
-                    android:textSize="16sp"
-                    app:layout_constraintStart_toStartOf="parent"
-                    app:layout_constraintEnd_toStartOf="@+id/captureStatusText"
-                    app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent"
-                    app:layout_goneMarginEnd="12dp" />
-
-                <TextView
-                    android:id="@+id/captureStatusText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Não permitida"
-                    android:textColor="@color/black"
-                    android:textSize="14sp"
-                    app:layout_constraintEnd_toEndOf="parent"
-                    app:layout_constraintTop_toTopOf="parent"
-                    app:layout_constraintBottom_toBottomOf="parent" />
-            </androidx.constraintlayout.widget.ConstraintLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <View
-            android:id="@+id/divider_permissions"
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="16dp"
-            android:background="@color/gray_divider" />
-
-        <!-- Ações -->
+        <!-- Ações (mínimo) -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/settingsButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -213,27 +68,11 @@
             android:layout_marginTop="8dp"
             android:text="VER HISTÓRICO" />
 
-        <androidx.appcompat.widget.SwitchCompat
-            android:id="@+id/saveImagesSwitch"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/save_images_switch_label"
-            android:textColor="@color/black"
-            android:checked="false"
-            app:thumbTint="@color/switch_thumb_selector"
-            app:trackTint="@color/switch_track_selector" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/shutdownButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:layout_marginBottom="8dp"
-            android:text="@string/shutdown_button"
-            app:backgroundTint="@color/black"
-            app:iconTint="@color/white"
-            android:textColor="@color/white" />
+        <!-- ✂️ Tudo o resto removido:
+             - Título "Permissões Necessárias"
+             - Cards: Acessibilidade / Overlay / Captura
+             - saveImagesSwitch (obsoleto)
+             - shutdownButton (agora no menu) -->
 
     </LinearLayout>
 </ScrollView>

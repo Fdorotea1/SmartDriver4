@@ -1,4 +1,3 @@
-
 package com.example.smartdriver.overlay
 
 import android.graphics.Typeface
@@ -39,6 +38,16 @@ import android.os.Build
 import android.view.WindowManager
 import android.graphics.drawable.GradientDrawable
 
+// IMPORTS para links tocáveis nas moradas
+import android.net.Uri
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.method.LinkMovementMethod
+import android.text.style.ClickableSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.UnderlineSpan
+import android.content.ActivityNotFoundException
+
 class OverlayService : Service() {
 
     private var startConfirmDialog: AlertDialog? = null
@@ -54,6 +63,9 @@ class OverlayService : Service() {
         val max = kotlin.math.max(a, b)
         return if (min == max) min else value.coerceIn(min, max)
     }
+
+    // [MOD] Snap a múltiplos de 5 para sliders/seekbars
+    private fun snap5(v: Int): Int = (((v + 2) / 5) * 5).coerceAtLeast(0)
 
     // ===== Receiver para mudanças de configuração (fold/unfold, rotação, multi-janela) =====
     private val configChangeReceiver = object : BroadcastReceiver() {
@@ -126,7 +138,8 @@ class OverlayService : Service() {
         const val TAG_HOUR = "OverlayHour"
         const val ACTION_CONFIRM_DISMISS_MAIN_OVERLAY = "com.example.smartdriver.overlay.CONFIRM_DISMISS_MAIN_OVERLAY"
         const val ACTION_CONFIRM_START_TRACKING = "com.example.smartdriver.overlay.CONFIRM_START_TRACKING"
-
+        const val EXTRA_OLD_DURATION_SEC = "extra_old_duration_sec"
+        const val EXTRA_NEW_DURATION_SEC = "extra_new_duration_sec"
         // >>> NOVAS AÇÕES para navegação vertical
         const val ACTION_SHOW_NEXT_OVERLAY = "com.example.smartdriver.overlay.SHOW_NEXT_OVERLAY"
         const val ACTION_SHOW_PREV_OVERLAY = "com.example.smartdriver.overlay.SHOW_PREV_OVERLAY"
@@ -746,7 +759,7 @@ class OverlayService : Service() {
         touchActivity("startTrackingFromLast")
     }
 
-    private fun handleStartTracking(intent: Intent?) {
+    fun handleStartTracking(intent: Intent?) {
         if (isTrackingOverlayAdded) {
             showOverlayBanner("Já existe uma viagem em acompanhamento", OverlayView.BannerType.INFO, 1800)
             return
@@ -759,29 +772,44 @@ class OverlayService : Service() {
         val offerData = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java)
         val initialEval = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
         if (offerData != null && initialEval != null) {
+            // UI: limpar overlays que não interessam em tracking
             hideMainOverlay()
             removeQuickMenuOverlay()
             removeFloatingIconOverlay()
 
+            // Métricas iniciais do "semáforo"
             val initialVpk = offerData.calculateProfitability()
+            val initialDist = offerData.calculateTotalDistance()?.takeIf { (it ?: 0.0) > 0.0 }
+            val initialDurMin = offerData.calculateTotalTimeMinutes()?.takeIf { (it ?: 0) > 0 }
+            val offerValRaw = offerData.value
+            val kmRating = initialEval.kmRating
+            val combinedBorder = initialEval.combinedBorderRating
+
+            // Mostra/cria o overlay de tracking (bolha)
             showTrackingOverlay(
                 initialVpk,
-                offerData.calculateTotalDistance()?.takeIf { it > 0 },
-                offerData.calculateTotalTimeMinutes()?.takeIf { it > 0 },
-                offerData.value,
-                initialEval.kmRating,
-                initialEval.combinedBorderRating
+                initialDist,
+                initialDurMin,
+                offerValRaw,
+                kmRating,
+                combinedBorder
             )
 
+            // >>> NOVO: injetar oferta atual no menu para a página MAPA conhecer Recolha/Destino
+            trackingOverlayView?.setOfferForMap(offerData)
+
+            // Posição inicial conveniente
             trackingOverlayView?.post { trackingOverlayView?.snapToTopRight() }
 
+            // €/h previsto (cor) herdado do semáforo, com fallback computado
             val hourFromEval = extractHourRatingFrom(initialEval)
             val baseHour = hourFromEval ?: computePlannedHourRatingFrom(offerData)
             trackingOverlayView?.setInitialHourRatingFromSemaphore(baseHour)
-            if (isDebugBuild) Log.d(TAG_HOUR, "€/h prev. rating definido a partir de ${if (hourFromEval != null) "EVAL" else "COMPUTE"}: $baseHour")
 
+            // Arranque de tracking de dados
             tripTracker.start(offerData, initialEval)
 
+            // Estado da app/queue/indicadores
             try { offerQueue.clearOnStart() } catch (_: Exception) {}
             OfferManager.getInstance(applicationContext).setTrackingActive(true)
             hideOfferIndicator()
@@ -789,7 +817,7 @@ class OverlayService : Service() {
             updateIconPulseColor()
             showOverlayBanner("Tracking iniciado", OverlayView.BannerType.INFO, 1500)
 
-            // === NOVO: gerar tripId e enviar no STARTED ===
+            // Id de viagem e broadcast
             if (currentTripId == null) currentTripId = UUID.randomUUID().toString()
             sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED).apply {
                 putExtra(EXTRA_TRIP_ID, currentTripId)
@@ -1117,7 +1145,10 @@ class OverlayService : Service() {
             if (isDetailsVisible) {
                 hideDetailsOverlay()
             } else {
-                // placeholders de moradas (virão no passo seguinte); kms/tempo aproveitados do OfferData
+                // usar moradas reais da oferta
+                val pickupAddr = oD.moradaRecolha?.takeIf { it.isNotBlank() }
+                val dropAddr   = oD.moradaDestino?.takeIf { it.isNotBlank() }
+
                 val kmToPickup = oD.pickupDistance.takeIf { it.isNotBlank() }
                 val tripKm = oD.tripDistance.takeIf { it.isNotBlank() }
                 val tripMin = (oD.tripDuration.toIntOrNull()
@@ -1125,8 +1156,8 @@ class OverlayService : Service() {
                     ?: 0).let { if (it > 0) "$it min" else null }
 
                 updateDetailsOverlayText(
-                    pickup = null,
-                    drop = null,
+                    pickup = pickupAddr,
+                    drop = dropAddr,
                     kmToPickup = kmToPickup,
                     tripKm = tripKm,
                     tripMin = tripMin
@@ -1204,8 +1235,6 @@ class OverlayService : Service() {
         if (floatingIconView == null) {
             floatingIconView = FloatingIconView(this).apply {
                 setImageResource(R.drawable.smartdriver)
-                // NÃO usar background do FAB (era quadrado):
-                // setBackgroundResource(R.drawable.fab_background)
                 background = null
                 scaleType = ScaleType.CENTER_INSIDE
                 setOnTouchListener(createFloatingIconTouchListener())
@@ -1571,11 +1600,7 @@ class OverlayService : Service() {
     }
 
     // stopShiftTimer deixa de matar o loop permanentemente (apenas pausa as atualizações)
-    private fun stopShiftTimer() {
-        // Opcional: manter o heartbeat e só não atualizar quando em pausa,
-        // mas se preferires mesmo parar o agendamento, descomenta a linha abaixo.
-        // shiftTimerRunnable?.let { shiftTimerHandler.removeCallbacks(it) }
-    }
+    private fun stopShiftTimer() {}
 
     private fun updateMenuViewShiftUI(decorridoOverrideSec: Long? = null) {
         quickMenuView?.let { menu ->
@@ -1865,8 +1890,11 @@ class OverlayService : Service() {
 
         val store = goalStore ?: GoalStore(this).also { goalStore = it }
 
+        // [MOD] SeekBar com passo 5: snap inicial + incrementos a 5
         seekBarGoalView?.max = 500
-        val savedGoal = store.getGoalEuro().coerceIn(0, 500)
+        seekBarGoalView?.keyProgressIncrement = 5 // teclas/setas em 5
+        val savedGoalRaw = store.getGoalEuro().coerceIn(0, 500)
+        val savedGoal = snap5(savedGoalRaw)
         goalOverrideEuro = savedGoal
         seekBarGoalView?.progress = savedGoal
 
@@ -1876,14 +1904,20 @@ class OverlayService : Service() {
 
         seekBarGoalView?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, value: Int, fromUser: Boolean) {
-                goalOverrideEuro = value
-                refreshGoalUI(value)
+                // [MOD] snap em tempo real
+                val snapped = snap5(value.coerceIn(0, (sb?.max ?: 500)))
+                if (fromUser && snapped != value) {
+                    sb?.progress = snapped
+                    return
+                }
+                goalOverrideEuro = snapped
+                refreshGoalUI(snapped)
                 refreshTimeAvgEta()
                 updateMenuViewShiftUI()
             }
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) {
-                val v = seekBarGoalView?.progress ?: savedGoal
+                val v = snap5(seekBarGoalView?.progress ?: savedGoal)
                 goalOverrideEuro = v
                 store.setGoalEuro(v)
                 try {
@@ -1926,9 +1960,18 @@ class OverlayService : Service() {
         val goalF = goalEuro.toDouble().coerceAtLeast(0.0)
         val progress = if (goalF <= 0.0) 0f else (earnings / goalF).toFloat().coerceIn(0f, 1f)
 
+        // Mostra a meta junto ao slider (continua a indicar o valor da meta)
         tv?.text = currencyFormatter.format(goalF)
 
-        donut.setCenterText(currencyFormatter.format(earnings), "de ${currencyFormatter.format(goalF)}")
+        // [MOD] Subtexto mostra o que FALTA / EXCEDENTE / ATINGIDA
+        val sub = when {
+            goalF <= 0.0 -> "Meta —"
+            earnings + 1e-6 < goalF -> "Falta " + currencyFormatter.format(goalF - earnings)
+            earnings - 1e-6 > goalF -> "Excedente " + currencyFormatter.format(earnings - goalF)
+            else -> "Meta atingida"
+        }
+
+        donut.setCenterText(currencyFormatter.format(earnings), sub)
         donut.setProgress(progress)
 
         if (earnings > goalF && goalF > 0.0) {
@@ -2299,7 +2342,7 @@ class OverlayService : Service() {
                 cornerRadius = dp(10).toFloat()
                 setColor(Color.parseColor("#CC000000")) // semi-preto
             }
-            isClickable = false
+            isClickable = true   // permitir toques
             isFocusable = false
         }
 
@@ -2309,6 +2352,11 @@ class OverlayService : Service() {
                 setTextColor(Color.WHITE)
                 textSize = 13f
                 if (bold) setTypeface(typeface, Typeface.BOLD)
+                // necessário para ClickableSpan funcionar
+                movementMethod = LinkMovementMethod.getInstance()
+                linksClickable = true
+                setLinkTextColor(Color.parseColor("#64B5F6"))
+                highlightColor = 0x3364B5F6.toInt()
             }
 
         ll.addView(label("Recolha:", bold = true))
@@ -2349,11 +2397,57 @@ class OverlayService : Service() {
         val ll = detailsOverlayView ?: return
         val children = (0 until ll.childCount).map { ll.getChildAt(it) as TextView }
         // ordem: Recolha / Destino / Até recolha / Viagem / Tempo
-        children.getOrNull(0)?.text = "Recolha: " + (pickup ?: "—")
-        children.getOrNull(1)?.text = "Destino: " + (drop ?: "—")
+
+        // Moradas com link tocável (e fallback: clicar em qualquer parte da linha)
+        children.getOrNull(0)?.let { setAddressLine(it, "Recolha: ", pickup) }
+        children.getOrNull(1)?.let { setAddressLine(it, "Destino: ", drop) }
+
+        // Os restantes são simples
         children.getOrNull(2)?.text = "Até recolha: " + (kmToPickup ?: "—")
         children.getOrNull(3)?.text = "Viagem: " + (tripKm ?: "—")
         children.getOrNull(4)?.text = "Tempo: " + (tripMin ?: "—")
+    }
+
+    private fun setAddressLine(tv: TextView, prefix: String, address: String?) {
+        val clean = address?.trim().orEmpty()
+        if (clean.isEmpty()) {
+            tv.text = prefix + "—"
+            tv.setOnClickListener(null)
+            return
+        }
+        val full = "$prefix$clean"
+        val span = SpannableString(full)
+        val start = prefix.length
+        val end = full.length
+
+        val click = object : ClickableSpan() {
+            override fun onClick(widget: View) { openAddressInMaps(clean) }
+        }
+        span.setSpan(click, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        span.setSpan(ForegroundColorSpan(Color.parseColor("#64B5F6")), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        span.setSpan(UnderlineSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        tv.text = span
+        tv.movementMethod = LinkMovementMethod.getInstance()
+        tv.linksClickable = true
+
+        // Fallback (alguns OEMs travam ClickableSpan em overlay)
+        tv.isClickable = true
+        tv.setOnClickListener { openAddressInMaps(clean) }
+    }
+
+    private fun openAddressInMaps(address: String) {
+        val geo = Uri.parse("geo:0,0?q=" + Uri.encode(address))
+        val intent = Intent(Intent.ACTION_VIEW, geo).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            val web = Uri.parse("https://www.google.com/maps/search/?api=1&query=" + Uri.encode(address))
+            try { startActivity(Intent(Intent.ACTION_VIEW, web).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            catch (_: Exception) { Toast.makeText(this, "Não foi possível abrir o mapa.", Toast.LENGTH_SHORT).show() }
+        } catch (_: Exception) {
+            Toast.makeText(this, "Erro ao abrir mapa.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showDetailsOverlayNearMain() {
@@ -2363,8 +2457,14 @@ class OverlayService : Service() {
         val lp = v.layoutParams as WindowManager.LayoutParams
         lp.x = (mainLayoutParams.x) + dp(4)
         lp.y = (mainLayoutParams.y) + dp(4)
-        try { wm.updateViewLayout(v, lp) } catch (_: Exception) {}
+        try {
+            wm.updateViewLayout(v, lp)
+            // Trazer para a frente na pilha de janelas deste processo
+            wm.removeViewImmediate(v)
+            wm.addView(v, lp)
+        } catch (_: Exception) { }
         v.visibility = View.VISIBLE
+        v.alpha = 0f
         v.animate().alpha(1f).setDuration(120).start()
         isDetailsVisible = true
     }

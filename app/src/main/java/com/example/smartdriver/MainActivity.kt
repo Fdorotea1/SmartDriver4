@@ -1,18 +1,18 @@
 package com.example.smartdriver
 
-import android.Manifest
 import android.app.Activity
 import android.content.*
-import android.content.pm.PackageManager
+import android.content.Context.RECEIVER_NOT_EXPORTED
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,24 +20,20 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.smartdriver.databinding.ActivityMainBinding
 import com.example.smartdriver.overlay.OverlayService
+import java.text.Normalizer
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var mediaProjectionManager: MediaProjectionManager
     private lateinit var mediaProjectionLauncher: ActivityResultLauncher<Intent>
-    private lateinit var accessibilitySettingsLauncher: ActivityResultLauncher<Intent>
-    private lateinit var overlaySettingsLauncher: ActivityResultLauncher<Intent>
-    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var sharedPreferences: SharedPreferences
 
     // Guards anti-duplo consentimento
     private var isRequestingProjection = false
     private var lastProjectionLaunchAt = 0L
     private val PROJECTION_LAUNCH_COOLDOWN_MS = 2500L
-
-    // Evitar loops ao sincronizar switches por código
-    private var isUpdatingPermSwitches = false
 
     // Receiver para desligar a app a partir do serviço/menu
     private val shutdownReceiver = object : BroadcastReceiver() {
@@ -52,14 +48,35 @@ class MainActivity : AppCompatActivity() {
         internal const val TAG = "MainActivity"
         internal const val PREFS_NAME = "SmartDriverPrefs"
         internal const val KEY_APP_ACTIVE = "appActive"
-        internal const val KEY_SAVE_IMAGES = "save_images"
+        internal const val KEY_SAVE_IMAGES = "save_images" // funcionalidade descontinuada; enviar sempre false
+
+        // Onboarding (wizard)
+        private const val ONBOARDING_PREFS = "smartdriver_prefs"
+        private const val KEY_ONBOARDING_DONE = "onboarding_done"
+        private const val ONBOARDING_CLS = "com.example.smartdriver.permissions.OnboardingActivity"
+
         const val ACTION_SHUTDOWN_APP = "com.example.smartdriver.ACTION_SHUTDOWN_APP"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // ► Se for a primeira execução e existir o wizard, abre-o e sai do Main
+        if (!isOnboardingDone() && classExists(ONBOARDING_CLS)) {
+            val clazz = Class.forName(ONBOARDING_CLS) as Class<out Activity>
+            startActivity(Intent(this, clazz))
+            finish()
+            return
+        }
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Se existir Toolbar no layout, usa-a para mostrar o menu
+        runCatching {
+            val tbId = resources.getIdentifier("toolbar", "id", packageName)
+            if (tbId != 0) setSupportActionBar(findViewById(tbId))
+        }
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -67,8 +84,13 @@ class MainActivity : AppCompatActivity() {
         setupResultLaunchers()
         setupButtonClickListeners()
         setupSwitches()
-        setupPermissionSwitches()
-        requestNeededPermissions()
+
+        // Ecrã principal minimalista: remove qualquer vestígio antigo
+        hideLegacyPermissionUiIfPresent()
+        hideUiByText(
+            "Permissões necessárias", "permissoes necessarias",
+            "3. captura", "3 captura", "captura"
+        )
 
         val filter = IntentFilter(ACTION_SHUTDOWN_APP)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -82,16 +104,44 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        updatePermissionStatusUI()
         updateAppStatusUI(sharedPreferences.getBoolean(KEY_APP_ACTIVE, false))
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try { unregisterReceiver(shutdownReceiver) } catch (_: IllegalArgumentException) {}
+        runCatching { unregisterReceiver(shutdownReceiver) }
     }
 
-    // ---------- Botões simples ----------
+    // ---------- MENU topo ----------
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_permissions_center -> {
+                val clsName = "com.example.smartdriver.permissions.PermissionsCenterActivity"
+                runCatching { Class.forName(clsName) as Class<out Activity> }
+                    .onSuccess { startActivity(Intent(this, it)) }
+                    .onFailure { Toast.makeText(this, "Centro de Permissões indisponível nesta build.", Toast.LENGTH_SHORT).show() }
+                true
+            }
+            R.id.action_shutdown -> {
+                stopScreenCaptureService()
+                stopOverlayService()
+                MediaProjectionData.clear()
+                persistAppActive(false)
+                binding.appStatusSwitch.isChecked = false
+                updateAppStatusUI(false)
+                finishAffinity()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    // ---------- Botões ----------
     private fun setupButtonClickListeners() {
         binding.settingsButton.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -99,28 +149,15 @@ class MainActivity : AppCompatActivity() {
         binding.historyButton.setOnClickListener {
             startActivity(Intent(this, HistoryActivity::class.java))
         }
-        binding.shutdownButton.setOnClickListener {
-            stopScreenCaptureService()
-            stopOverlayService()
-            MediaProjectionData.clear()
-            persistAppActive(false)
-            binding.appStatusSwitch.isChecked = false
-            updatePermissionStatusUI()
-            updateAppStatusUI(false)
-            finishAffinity()
+        // Se existir botão antigo de “Encerrar”, esconde (agora está no menu)
+        runCatching {
+            val id = resources.getIdentifier("shutdownButton", "id", packageName)
+            if (id != 0) findViewById<View>(id)?.visibility = View.GONE
         }
     }
 
     // ---------- Launchers ----------
     private fun setupResultLaunchers() {
-        accessibilitySettingsLauncher =
-            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-                Handler(Looper.getMainLooper()).postDelayed({ updatePermissionStatusUI() }, 300)
-            }
-        overlaySettingsLauncher =
-            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-                Handler(Looper.getMainLooper()).postDelayed({ updatePermissionStatusUI() }, 300)
-            }
         mediaProjectionLauncher =
             registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
                 if (result.resultCode == Activity.RESULT_OK && result.data != null) {
@@ -142,13 +179,9 @@ class MainActivity : AppCompatActivity() {
                     MediaProjectionData.clear()
                     Toast.makeText(this, "Permissão de captura é necessária.", Toast.LENGTH_LONG).show()
                 }
-                updatePermissionStatusUI()
                 isRequestingProjection = false
                 lastProjectionLaunchAt = SystemClock.elapsedRealtime()
             }
-
-        notificationPermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
     }
 
     // ---------- Switch principal ----------
@@ -157,13 +190,9 @@ class MainActivity : AppCompatActivity() {
         binding.appStatusSwitch.isChecked = savedActive
         updateAppStatusUI(savedActive)
 
-        val saveImagesEnabled = sharedPreferences.getBoolean(KEY_SAVE_IMAGES, false)
-        binding.saveImagesSwitch.isChecked = saveImagesEnabled
-
         binding.appStatusSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
-                val allOk = hasAllCorePermissions()
-                if (allOk) {
+                if (hasAllCorePermissions()) {
                     val started = startServicesIfReady()
                     if (started) {
                         persistAppActive(true)
@@ -181,90 +210,8 @@ class MainActivity : AppCompatActivity() {
                 stopOverlayService()
                 MediaProjectionData.clear()
                 persistAppActive(false)
-                updatePermissionStatusUI()
                 updateAppStatusUI(false)
             }
-        }
-
-        binding.saveImagesSwitch.setOnCheckedChangeListener { _, isChecked ->
-            sharedPreferences.edit().putBoolean(KEY_SAVE_IMAGES, isChecked).apply()
-            updateScreenCaptureSaveSetting(isChecked)
-            Toast.makeText(
-                this,
-                if (isChecked) "Capturas de oferta serão guardadas" else "Capturas NÃO serão guardadas",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-    }
-
-    // ---------- Switches de permissões ----------
-    private fun setupPermissionSwitches() {
-        // Acessibilidade
-        binding.accessibilityPermSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (isUpdatingPermSwitches) return@setOnCheckedChangeListener
-            val enabled = isAccessibilityServiceEnabled()
-            when {
-                isChecked && !enabled -> {
-                    Toast.makeText(this, "Ativar em Definições > Acessibilidade", Toast.LENGTH_SHORT).show()
-                    accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    syncPermissionSwitches()
-                }
-                !isChecked && enabled -> {
-                    Toast.makeText(this, "Desative manualmente o serviço em Acessibilidade.", Toast.LENGTH_SHORT).show()
-                    accessibilitySettingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    syncPermissionSwitches()
-                }
-            }
-        }
-
-        // Overlay
-        binding.overlayPermSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (isUpdatingPermSwitches) return@setOnCheckedChangeListener
-            val canDraw = Settings.canDrawOverlays(this)
-            when {
-                isChecked && !canDraw -> {
-                    Toast.makeText(this, "Conceda a permissão de sobreposição.", Toast.LENGTH_SHORT).show()
-                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                    overlaySettingsLauncher.launch(intent)
-                    syncPermissionSwitches()
-                }
-                !isChecked && canDraw -> {
-                    Toast.makeText(this, "Desative a permissão de overlay nas definições.", Toast.LENGTH_SHORT).show()
-                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                    overlaySettingsLauncher.launch(intent)
-                    syncPermissionSwitches()
-                }
-            }
-        }
-    }
-
-    private fun syncPermissionSwitches() {
-        isUpdatingPermSwitches = true
-        try {
-            val acc = isAccessibilityServiceEnabled()
-            val ovl = Settings.canDrawOverlays(this)
-            val cap = MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
-
-            // switches + desativação quando já concedido
-            binding.accessibilityPermSwitch.isChecked = acc
-            binding.accessibilityPermSwitch.isEnabled = !acc
-            binding.accessibilityStatusTextView.setTextColor(
-                ContextCompat.getColor(this, if (acc) R.color.gray_inactive else R.color.black)
-            )
-
-            binding.overlayPermSwitch.isChecked = ovl
-            binding.overlayPermSwitch.isEnabled = !ovl
-            binding.overlayStatusTextView.setTextColor(
-                ContextCompat.getColor(this, if (ovl) R.color.gray_inactive else R.color.black)
-            )
-
-            // Captura: só estado (sem switch)
-            binding.captureStatusText.text = if (cap) "Sessão ativa" else "Não permitida"
-            binding.captureStatusText.setTextColor(
-                ContextCompat.getColor(this, if (cap) R.color.gray_inactive else R.color.black)
-            )
-        } finally {
-            isUpdatingPermSwitches = false
         }
     }
 
@@ -282,7 +229,6 @@ class MainActivity : AppCompatActivity() {
             binding.appStatusSwitch.isChecked = false
             persistAppActive(false)
         }
-        updatePermissionStatusUI()
         updateAppStatusUI(sharedPreferences.getBoolean(KEY_APP_ACTIVE, false))
     }
 
@@ -296,19 +242,19 @@ class MainActivity : AppCompatActivity() {
         val cap = MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
 
         if (!acc) {
-            Toast.makeText(this, "Ative o Serviço de Acessibilidade (Item 1).", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Ative o Serviço de Acessibilidade nas Definições do sistema.", Toast.LENGTH_SHORT).show()
             binding.appStatusSwitch.isChecked = false
             persistAppActive(false)
             updateAppStatusUI(false); return
         }
         if (!ovl) {
-            Toast.makeText(this, "Permita o Overlay (Item 2).", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Permita o Overlay nas Definições do sistema.", Toast.LENGTH_SHORT).show()
             binding.appStatusSwitch.isChecked = false
             persistAppActive(false)
             updateAppStatusUI(false); return
         }
         if (!cap) {
-            Toast.makeText(this, "Permita a Captura de Ecrã (Item 3).", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Permita a Captura de Ecrã quando solicitado.", Toast.LENGTH_SHORT).show()
             requestScreenCapturePermission(); return
         }
 
@@ -327,13 +273,10 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             isRequestingProjection = false
             Toast.makeText(this, "Não foi possível solicitar permissão de captura.", Toast.LENGTH_SHORT).show()
-            updatePermissionStatusUI()
         }
     }
 
     // ---------- UI ----------
-    private fun updatePermissionStatusUI() = syncPermissionSwitches()
-
     private fun isAccessibilityServiceEnabled(): Boolean {
         val expected = "$packageName/${SmartDriverAccessibilityService::class.java.name}"
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
@@ -345,6 +288,66 @@ class MainActivity : AppCompatActivity() {
         binding.appStatusText.setTextColor(
             ContextCompat.getColor(this, if (isActive) R.color.black else R.color.gray_inactive)
         )
+    }
+
+    // Esconde controles/headers legados por ID (se existirem no layout)
+    private fun hideLegacyPermissionUiIfPresent() {
+        val ids = arrayOf(
+            // Secção de permissões (título/contêiner)
+            "permissionsSection", "permissionsCard", "permissionsContainer",
+            "permissionsHeaderText", "permissionsTitle",
+            // Switches e estados legados
+            "accessibilityPermSwitch", "overlayPermSwitch",
+            "accessibilityStatusTextView", "overlayStatusTextView", "captureStatusText",
+            // Guardar capturas — remover do ecrã principal
+            "saveImagesSwitch", "saveImagesLabel"
+        )
+        ids.forEach { name ->
+            val id = resources.getIdentifier(name, "id", packageName)
+            if (id != 0) findViewById<View>(id)?.visibility = View.GONE
+        }
+    }
+
+    // Esconde por TEXTO (normaliza acentos e pontuação; oculta o container da linha)
+    private fun hideUiByText(vararg targetsRaw: String) {
+        val targets = targetsRaw.map { normalize(it) }
+        val root = findViewById<View>(android.R.id.content) as? ViewGroup ?: return
+
+        fun shouldHide(text: CharSequence?): Boolean {
+            if (text.isNullOrBlank()) return false
+            val norm = normalize(text.toString())
+            return targets.any { t -> norm.contains(t) }
+        }
+
+        fun hideRow(view: View) {
+            // Sobe e tenta ocultar o container da linha; fallback: o próprio TextView
+            var v: View? = view
+            var container: ViewGroup? = null
+            while (v != null) {
+                val p = v.parent
+                if (p is ViewGroup) {
+                    container = p
+                    v = p
+                } else break
+            }
+            (container ?: view).visibility = View.GONE
+        }
+
+        fun visit(v: View) {
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) visit(v.getChildAt(i))
+            } else if (v is TextView) {
+                if (shouldHide(v.text)) hideRow(v)
+            }
+        }
+        visit(root)
+    }
+
+    private fun normalize(s: String): String {
+        val tmp = Normalizer.normalize(s.lowercase(Locale.getDefault()), Normalizer.Form.NFD)
+        return tmp.replace("\\p{M}+".toRegex(), "") // remove acentos
+            .replace("[^a-z0-9]+".toRegex(), " ")   // remove pontuação/símbolos
+            .trim()
     }
 
     // ---------- Serviços ----------
@@ -364,10 +367,14 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, ScreenCaptureService::class.java).apply {
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, MediaProjectionData.resultCode)
             putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, MediaProjectionData.resultData)
-            putExtra(KEY_SAVE_IMAGES, binding.saveImagesSwitch.isChecked)
+            // Não guardamos em galeria (feature descontinuada)
+            putExtra(KEY_SAVE_IMAGES, false)
         }
-        return try { ContextCompat.startForegroundService(this, intent); true }
-        catch (_: Exception) { Toast.makeText(this, "Falha a iniciar captura.", Toast.LENGTH_SHORT).show(); false }
+        return try {
+            ContextCompat.startForegroundService(this, intent); true
+        } catch (_: Exception) {
+            Toast.makeText(this, "Falha a iniciar captura.", Toast.LENGTH_SHORT).show(); false
+        }
     }
 
     private fun stopScreenCaptureService() {
@@ -375,31 +382,24 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_STOP_CAPTURE
         }
-        try { stopService(intent) } catch (_: Exception) {}
+        runCatching { stopService(intent) }
     }
 
     private fun startOverlayService(): Boolean {
         if (!Settings.canDrawOverlays(this)) return false
         if (OverlayService.isRunning.get()) return true
         val intent = Intent(this, OverlayService::class.java)
-        return try { ContextCompat.startForegroundService(this, intent); true }
-        catch (_: Exception) { Toast.makeText(this, "Falha a iniciar overlay.", Toast.LENGTH_SHORT).show(); false }
+        return try {
+            ContextCompat.startForegroundService(this, intent); true
+        } catch (_: Exception) {
+            Toast.makeText(this, "Falha a iniciar overlay.", Toast.LENGTH_SHORT).show(); false
+        }
     }
 
     private fun stopOverlayService() {
         if (!OverlayService.isRunning.get()) return
         val intent = Intent(this, OverlayService::class.java)
-        try { stopService(intent) } catch (_: Exception) {}
-    }
-
-    private fun updateScreenCaptureSaveSetting(shouldSave: Boolean) {
-        if (ScreenCaptureService.isRunning.get()) {
-            val intent = Intent(this, ScreenCaptureService::class.java).apply {
-                action = ScreenCaptureService.ACTION_UPDATE_SETTINGS
-                putExtra(KEY_SAVE_IMAGES, shouldSave)
-            }
-            try { startService(intent) } catch (_: Exception) {}
-        }
+        runCatching { stopService(intent) }
     }
 
     // ---------- Auxiliares ----------
@@ -414,12 +414,9 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_APP_ACTIVE, active).apply()
     }
 
-    private fun requestNeededPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-    }
+    private fun isOnboardingDone(): Boolean =
+        getSharedPreferences(ONBOARDING_PREFS, MODE_PRIVATE).getBoolean(KEY_ONBOARDING_DONE, false)
+
+    private fun classExists(qualifiedName: String): Boolean =
+        runCatching { Class.forName(qualifiedName) }.isSuccess
 }

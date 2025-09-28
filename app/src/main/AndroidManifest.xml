@@ -9,10 +9,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+
+    <!-- Bateria (para o passo do wizard) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <!-- Permissões de Armazenamento (Opcional/Legado) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
@@ -29,6 +31,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SmartDriver"
         tools:targetApi="31">
+
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="A_TUA_API_KEY"/>
@@ -40,7 +43,12 @@
             android:theme="@style/Theme.SmartDriver.TransparentDialog"
             android:launchMode="singleTop" />
 
-        <!-- Splash -->
+        <activity
+            android:name=".map.MapEditorActivity"
+            android:exported="true"
+            android:label="@string/map_editor_title" />
+
+        <!-- Splash (LAUNCHER) -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
@@ -85,7 +93,17 @@
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode"
             android:theme="@style/Theme.SmartDriver.MapOverlay" />
 
+        <!-- Wizard de permissões (primeira execução) -->
+        <activity
+            android:name=".permissions.OnboardingActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SmartDriver.BlackBar" />
 
+        <!-- Centro de Permissões (acesso manual após onboarding) -->
+        <activity
+            android:name=".permissions.PermissionsCenterActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SmartDriver.BlackBar" />
 
         <!-- Serviços -->
         <service

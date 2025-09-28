@@ -4,20 +4,20 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
-import android.util.Log
 import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.example.smartdriver.databinding.ActivitySettingsBinding
+import com.example.smartdriver.map.MapEditorActivity
 import com.example.smartdriver.overlay.OverlayService
 import com.example.smartdriver.overlay.OverlayView
-import com.example.smartdriver.utils.*
-
-import java.util.*
+import com.example.smartdriver.utils.BorderRating
+import com.example.smartdriver.utils.EvaluationResult
+import com.example.smartdriver.utils.IndividualRating
+import com.example.smartdriver.utils.OfferData
+import java.util.Locale
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -39,10 +39,10 @@ class SettingsActivity : AppCompatActivity() {
         // Aparência
         private const val KEY_FONT_SIZE = "font_size_percent"
         private const val KEY_TRANSPARENCY = "transparency_percent"
-        private const val KEY_OVERLAY_Y_OFFSET = "overlay_y_offset_dp" // <-- NOVO
+        private const val KEY_OVERLAY_Y_OFFSET = "overlay_y_offset_dp"
         private const val DEFAULT_FONT_SIZE_PERCENT = 100
         private const val DEFAULT_TRANSPARENCY_PERCENT = 15
-        private const val DEFAULT_OVERLAY_Y_OFFSET = 50 // <-- NOVO
+        private const val DEFAULT_OVERLAY_Y_OFFSET = 50
 
         fun getGoodKmThreshold(context: Context) =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -143,8 +143,8 @@ class SettingsActivity : AppCompatActivity() {
         binding.transparencySeekBar.progress = getTransparency(this)
         binding.transparencyValueTextView.text = "${getTransparency(this)}% transp"
 
-        binding.overlayYOffsetSeekBar.progress = getOverlayYOffsetDp(this) // <-- NOVO
-        binding.overlayYOffsetValueTextView.text = "${getOverlayYOffsetDp(this)} dp" // <-- NOVO
+        binding.overlayYOffsetSeekBar.progress = getOverlayYOffsetDp(this)
+        binding.overlayYOffsetValueTextView.text = "${getOverlayYOffsetDp(this)} dp"
 
         updatePreviewAppearance()
         updatePreviewOverlayY(getOverlayYOffsetDp(this))
@@ -171,7 +171,6 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
         })
 
-        // NOVO: listener para Y Offset
         binding.overlayYOffsetSeekBar.setOnSeekBarChangeListener(object :
             SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -194,6 +193,15 @@ class SettingsActivity : AppCompatActivity() {
             resetToDefaults()
             Toast.makeText(this, "Padrões restaurados.", Toast.LENGTH_SHORT).show()
         }
+
+        // ► NOVO: botão para abrir o Editor de Zonas (No-Go)
+        binding.openZoneEditorButton.setOnClickListener {
+            try {
+                startActivity(Intent(this, MapEditorActivity::class.java))
+            } catch (t: Throwable) {
+                Toast.makeText(this, "Erro ao abrir o Editor de Zonas", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun updatePreviewAppearance() {
@@ -213,7 +221,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun validateInputs(): Boolean {
-        return true // Mantém a tua lógica anterior de validação aqui
+        return true
     }
 
     private fun saveSettings() {
@@ -224,7 +232,7 @@ class SettingsActivity : AppCompatActivity() {
         editor.putFloat(KEY_POOR_HOUR_THRESHOLD, binding.poorHourThresholdEditText.text.toString().replace(',', '.').toFloat())
         editor.putInt(KEY_FONT_SIZE, binding.fontSizeSeekBar.progress)
         editor.putInt(KEY_TRANSPARENCY, binding.transparencySeekBar.progress)
-        editor.putInt(KEY_OVERLAY_Y_OFFSET, binding.overlayYOffsetSeekBar.progress) // <-- NOVO
+        editor.putInt(KEY_OVERLAY_Y_OFFSET, binding.overlayYOffsetSeekBar.progress)
         editor.apply()
     }
 
@@ -233,7 +241,7 @@ class SettingsActivity : AppCompatActivity() {
             action = OverlayService.ACTION_UPDATE_SETTINGS
             putExtra(OverlayService.EXTRA_FONT_SIZE, binding.fontSizeSeekBar.progress)
             putExtra(OverlayService.EXTRA_TRANSPARENCY, binding.transparencySeekBar.progress)
-            putExtra("extra_overlay_y_offset", binding.overlayYOffsetSeekBar.progress) // <-- NOVO
+            putExtra("extra_overlay_y_offset", binding.overlayYOffsetSeekBar.progress)
         }
         startService(intent)
     }
@@ -241,7 +249,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun resetToDefaults() {
         binding.fontSizeSeekBar.progress = DEFAULT_FONT_SIZE_PERCENT
         binding.transparencySeekBar.progress = DEFAULT_TRANSPARENCY_PERCENT
-        binding.overlayYOffsetSeekBar.progress = DEFAULT_OVERLAY_Y_OFFSET // <-- NOVO
+        binding.overlayYOffsetSeekBar.progress = DEFAULT_OVERLAY_Y_OFFSET
         updatePreviewAppearance()
         updatePreviewOverlayY(DEFAULT_OVERLAY_Y_OFFSET)
     }

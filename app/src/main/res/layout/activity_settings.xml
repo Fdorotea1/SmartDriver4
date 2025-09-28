@@ -150,9 +150,9 @@
             android:id="@+id/previewOverlayContainer"
             android:layout_width="match_parent"
             android:layout_height="320dp"
-        android:layout_gravity="center_horizontal"
-        android:padding="8dp"
-        android:background="#F0F0F0" />
+            android:layout_gravity="center_horizontal"
+            android:padding="8dp"
+            android:background="#F0F0F0" />
 
         <!-- Controles de Aparência -->
         <TextView
@@ -269,6 +269,7 @@
             android:layout_height="wrap_content"
             android:text="@string/save_settings"
             android:layout_marginTop="16dp"/>
+
         <Button
             android:id="@+id/resetToDefaultsButton"
             style="@style/Widget.MaterialComponents.Button.TextButton"
@@ -276,5 +277,13 @@
             android:layout_height="wrap_content"
             android:text="@string/reset_defaults"
             android:layout_marginTop="8dp"/>
+
+        <!-- ► NOVO: Atalho para o Editor de Zonas -->
+        <Button
+            android:id="@+id/openZoneEditorButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Editor de Zonas (No-Go)"
+            android:layout_marginTop="16dp"/>
     </LinearLayout>
 </ScrollView>

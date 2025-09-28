@@ -3,26 +3,27 @@ package com.example.smartdriver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.util.Log
+import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.widget.EditText
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.view.ActionMode
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.smartdriver.databinding.ActivityHistoryBinding
 import com.example.smartdriver.overlay.OverlayService
 import com.example.smartdriver.utils.TripHistoryEntry
-import com.example.smartdriver.utils.TripScreenshotIndex
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import com.google.gson.reflect.TypeToken
@@ -38,6 +39,10 @@ class HistoryActivity : AppCompatActivity() {
     private lateinit var historyAdapter: HistoryAdapter
     private var historyList: MutableList<TripHistoryEntry> = mutableListOf()
 
+    // ---- ActionMode (seleção múltipla) ----
+    private var actionMode: ActionMode? = null
+    private val MENU_ID_DELETE = 1001
+
     companion object {
         private const val TAG = "HistoryActivity"
     }
@@ -52,8 +57,21 @@ class HistoryActivity : AppCompatActivity() {
         binding = ActivityHistoryBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.title = "Histórico de Viagens"
+        // ----- App bar preta com título branco -----
+        supportActionBar?.apply {
+            setDisplayHomeAsUpEnabled(true)
+            setBackgroundDrawable(ColorDrawable(Color.BLACK))
+            title = SpannableString("Histórico de Viagens").apply {
+                setSpan(ForegroundColorSpan(Color.WHITE), 0, length, 0)
+            }
+        }
+
+        // Status + nav bar pretas; fundo preto
+        window.statusBarColor = Color.BLACK
+        window.navigationBarColor = Color.BLACK
+        binding.root.setBackgroundColor(Color.BLACK)
+        binding.recyclerViewHistory.setBackgroundColor(Color.BLACK)
+        binding.textViewEmptyHistory.setTextColor(Color.WHITE)
 
         historyPrefs = getSharedPreferences(OverlayService.HISTORY_PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -72,16 +90,58 @@ class HistoryActivity : AppCompatActivity() {
         historyAdapter = HistoryAdapter(
             historyList,
             onItemClick = { entry, position -> showEditDialog(entry, position) },
-            onItemLongClick = { entry, position -> showDeleteConfirmationDialog(entry, position) }
+            onItemLongClick = { _, _ -> /* obsoleto; adapter gere seleção */ },
+            onSelectionChanged = { count ->
+                if (count > 0) startOrUpdateActionMode(count) else finishActionModeIfNeeded()
+            }
         )
         binding.recyclerViewHistory.apply {
             layoutManager = LinearLayoutManager(this@HistoryActivity)
             adapter = historyAdapter
         }
-        Log.d(TAG, "RecyclerView configurado (click=editar, longClick=apagar).")
+        Log.d(TAG, "RecyclerView configurado (tap=editar; long-press=seleção).")
     }
 
-    // ---------------- Editar valor/distância/tempo ----------------
+    // ---------- ActionMode helpers ----------
+    private fun startOrUpdateActionMode(selectedCount: Int) {
+        if (actionMode == null) {
+            actionMode = startSupportActionMode(object : ActionMode.Callback {
+                override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                    // botão Excluir (ícone do sistema)
+                    menu.add(0, MENU_ID_DELETE, 0, "Excluir")
+                        .setIcon(android.R.drawable.ic_menu_delete)
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                    // estilo fica pelo tema escuro
+                    return true
+                }
+                override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean = false
+                override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                    return when (item.itemId) {
+                        MENU_ID_DELETE -> { deleteSelectedEntries(); true }
+                        else -> false
+                    }
+                }
+                override fun onDestroyActionMode(mode: ActionMode) {
+                    // Não limpar aqui — fazemos no finishActionModeIfNeeded() com post
+                    actionMode = null
+                }
+            })
+        }
+        actionMode?.title = "$selectedCount selecionadas"
+    }
+
+    // Usa post() para não mexer no adapter durante layout
+    private fun finishActionModeIfNeeded() {
+        val mode = actionMode ?: return
+        actionMode = null
+        binding.recyclerViewHistory.post {
+            try { historyAdapter.clearSelection() } catch (_: Exception) {}
+            try { mode.finish() } catch (_: Exception) {}
+        }
+    }
+    // ---------------------------------------
+
+    // ---------------- Editar valor/distância/tempo (+ moradas) ----------------
 
     private fun showEditDialog(entry: TripHistoryEntry, position: Int) {
         val currentEff = getEffectiveValue(entry)
@@ -128,58 +188,60 @@ class HistoryActivity : AppCompatActivity() {
         }
         container.addView(etDur)
 
-        // Ver se há screenshot próxima do início da viagem
-        val nearestShotPath = TripScreenshotIndex.findNearestForStart(this, entry.startTimeMillis, 15_000L)
+        // --- Moradas (Origem/Destino)
+        container.addView(makeLabel("Origem" +
+                (entry.pickupAddress?.takeIf { it.isNotBlank() }?.let { "  •  atual: $it" } ?: "")))
+        val etPickup = EditText(this).apply {
+            hint = "Ex.: Rua da Junqueira 123"
+            setText(entry.pickupAddress?.takeIf { it.isNotBlank() } ?: "")
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        container.addView(etPickup)
+
+        container.addView(makeLabel("Destino" +
+                (entry.dropoffAddress?.takeIf { it.isNotBlank() }?.let { "  •  atual: $it" } ?: "")))
+        val etDropoff = EditText(this).apply {
+            hint = "Ex.: Praça do Comércio"
+            setText(entry.dropoffAddress?.takeIf { it.isNotBlank() } ?: "")
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        container.addView(etDropoff)
 
         val builder = AlertDialog.Builder(this)
-            .setTitle("Editar registo (valor, kms e tempo)")
+            .setTitle("Editar registo (valor, kms, tempo e moradas)")
             .setView(container)
             .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Guardar") { dialog, _ ->
+                val newEff = etValor.text?.toString()
+                    ?.replace(",", ".")?.trim()?.takeIf { it.isNotEmpty() }
+                    ?.toDoubleOrNull()?.takeIf { it >= 0.0 }
 
-        if (nearestShotPath != null) {
-            builder.setNeutralButton("Ver screenshot") { _, _ ->
-                showScreenshotPreview(nearestShotPath)
-            }
-        }
+                val newKm = etKm.text?.toString()
+                    ?.replace(",", ".")?.trim()?.takeIf { it.isNotEmpty() }
+                    ?.toDoubleOrNull()?.takeIf { it >= 0.0 }
 
-        builder.setPositiveButton("Guardar") { dialog, _ ->
-            // Valor (€)
-            val newEff = etValor.text?.toString()
-                ?.replace(",", ".")
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?.toDoubleOrNull()
-                ?.takeIf { it >= 0.0 }
+                val newDurSec = etDur.text?.toString()?.trim()
+                    ?.takeIf { it.isNotEmpty() }?.let { parseDurationFlexible(it) }
 
-            // Distância (km)
-            val newKm = etKm.text?.toString()
-                ?.replace(",", ".")
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?.toDoubleOrNull()
-                ?.takeIf { it >= 0.0 }
+                if (etDur.text?.isNotEmpty() == true && newDurSec == null) {
+                    Toast.makeText(this, "Duração inválida. Use mm:ss (ex.: 12:30).", Toast.LENGTH_LONG).show()
+                    dialog.dismiss(); return@setPositiveButton
+                }
 
-            // Duração (segundos)
-            val newDurSec = etDur.text?.toString()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?.let { parseDurationFlexible(it) }
+                val pickupToApply = etPickup.text?.toString()?.trim()?.let { if (it.isEmpty()) null else it }
+                val dropoffToApply = etDropoff.text?.toString()?.trim()?.let { if (it.isEmpty()) null else it }
 
-            if (etDur.text?.isNotEmpty() == true && newDurSec == null) {
-                Toast.makeText(this, "Duração inválida. Use mm:ss (ex.: 12:30).", Toast.LENGTH_LONG).show()
+                if (newEff == null && newKm == null && newDurSec == null &&
+                    pickupToApply == null && dropoffToApply == null) {
+                    Toast.makeText(this, "Nada para atualizar.", Toast.LENGTH_SHORT).show()
+                    dialog.dismiss(); return@setPositiveButton
+                }
+
+                applyEditToHistory(entry, position, newEff, newKm, newDurSec, pickupToApply, dropoffToApply)
                 dialog.dismiss()
-                return@setPositiveButton
             }
-
-            if (newEff == null && newKm == null && newDurSec == null) {
-                Toast.makeText(this, "Nada para atualizar.", Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
-                return@setPositiveButton
-            }
-
-            applyEditToHistory(entry, position, newEff, newKm, newDurSec)
-            dialog.dismiss()
-        }
 
         builder.show()
     }
@@ -190,6 +252,7 @@ class HistoryActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
             textSize = 14f
             setPadding(0, dp(12), 0, dp(6))
+            setTextColor(Color.WHITE)
         }
 
     private fun applyEditToHistory(
@@ -197,7 +260,9 @@ class HistoryActivity : AppCompatActivity() {
         position: Int,
         newEffective: Double?,
         newDistanceKm: Double?,
-        newDurationSec: Long?
+        newDurationSec: Long?,
+        newPickupAddress: String?,
+        newDropoffAddress: String?
     ) {
         try {
             val currentHistoryJson = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
@@ -225,11 +290,14 @@ class HistoryActivity : AppCompatActivity() {
             }
 
             val oldEff = getEffectiveValue(oldEntryObj)
+            val oldDur = oldEntryObj.durationSeconds
 
             val updated = oldEntryObj.copy(
                 effectiveValue = newEffective ?: oldEntryObj.effectiveValue,
                 initialDistanceKm = newDistanceKm ?: oldEntryObj.initialDistanceKm,
-                durationSeconds = newDurationSec ?: oldEntryObj.durationSeconds
+                durationSeconds = newDurationSec ?: oldEntryObj.durationSeconds,
+                pickupAddress = newPickupAddress ?: oldEntryObj.pickupAddress,
+                dropoffAddress = newDropoffAddress ?: oldEntryObj.dropoffAddress
             )
 
             jsonList[indexToUpdate] = gson.toJson(updated)
@@ -237,19 +305,25 @@ class HistoryActivity : AppCompatActivity() {
 
             if (position < historyList.size && historyList[position].startTimeMillis == entryToEdit.startTimeMillis) {
                 historyList[position] = updated
-                historyAdapter.notifyItemChanged(position)
+                historyAdapter.updateData(historyList)
             } else {
                 loadHistoryData()
             }
 
             val newEffForDelta = getEffectiveValue(updated)
-            val delta = newEffForDelta - oldEff
-            if (delta != 0.0) {
+            val deltaValue = newEffForDelta - oldEff
+            val durationChanged = oldDur != updated.durationSeconds
+
+            // ⚠️ Enviar delta sempre que valor OU duração mudarem
+            if (deltaValue != 0.0 || durationChanged) {
                 val intent = Intent(this, com.example.smartdriver.overlay.OverlayService::class.java).apply {
                     action = OverlayService.ACTION_APPLY_SHIFT_DELTA
                     putExtra(OverlayService.EXTRA_TRIP_START_MS, updated.startTimeMillis)
                     putExtra(OverlayService.EXTRA_OLD_EFFECTIVE, oldEff)
                     putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, newEffForDelta)
+                    // NOVO: deltas de duração
+                    putExtra(OverlayService.EXTRA_OLD_DURATION_SEC, oldDur)
+                    putExtra(OverlayService.EXTRA_NEW_DURATION_SEC, updated.durationSeconds)
                 }
                 try { startService(intent) } catch (_: Exception) {}
             }
@@ -258,6 +332,8 @@ class HistoryActivity : AppCompatActivity() {
             newEffective?.let { parts.add("Valor → ${currencyPT.format(it)}") }
             newDistanceKm?.let { parts.add(String.format(Locale.US, "Distância → %.2f km", it)) }
             newDurationSec?.let { parts.add("Duração → ${formatDurationPrefill(it)}") }
+            if (newPickupAddress != null) parts.add("Origem → $newPickupAddress")
+            if (newDropoffAddress != null) parts.add("Destino → $newDropoffAddress")
 
             Toast.makeText(
                 this,
@@ -275,69 +351,62 @@ class HistoryActivity : AppCompatActivity() {
         return (e.effectiveValue ?: e.offerValue ?: 0.0).coerceAtLeast(0.0)
     }
 
-    // ---------------- Apagar entrada ----------------
+    // ---------------- Excluir múltiplas (robusto) ----------------
 
-    private fun showDeleteConfirmationDialog(entryToDelete: TripHistoryEntry, position: Int) {
-        AlertDialog.Builder(this)
-            .setTitle("Excluir Entrada?")
-            .setMessage("Tem a certeza que deseja excluir esta entrada do histórico?")
-            .setIcon(android.R.drawable.ic_dialog_alert)
-            .setPositiveButton("Excluir") { dialog, _ ->
-                deleteHistoryEntry(entryToDelete, position)
-                dialog.dismiss()
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
+    private fun deleteSelectedEntries() {
+        val selected = historyAdapter.getSelectedEntries()
+        if (selected.isEmpty()) { finishActionModeIfNeeded(); return }
 
-    private fun deleteHistoryEntry(entryToDelete: TripHistoryEntry, position: Int) {
-        Log.d(TAG, "Excluir entrada na posição $position com startTime: ${entryToDelete.startTimeMillis}")
+        // Fecha a ActionMode e limpa seleção ANTES (adiado por post) de mexer em dados/UI
+        finishActionModeIfNeeded()
+
         try {
             val currentHistoryJson = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
             val listType = object : TypeToken<MutableList<String>>() {}.type
             val mutableJsonList: MutableList<String> = gson.fromJson(currentHistoryJson, listType) ?: mutableListOf()
 
-            var indexToRemove = -1
-            for (i in mutableJsonList.indices) {
+            val toRemoveKeys = selected.map { it.startTimeMillis }.toSet()
+
+            // Atualiza armazenamento: mantém itens NÃO selecionados
+            val remaining = mutableListOf<String>()
+            for (json in mutableJsonList) {
                 try {
-                    val entryFromJson = gson.fromJson(mutableJsonList[i], TripHistoryEntry::class.java)
-                    if (entryFromJson != null && entryFromJson.startTimeMillis == entryToDelete.startTimeMillis) {
-                        indexToRemove = i
-                        break
+                    val e = gson.fromJson(json, TripHistoryEntry::class.java)
+                    if (e == null || e.startTimeMillis !in toRemoveKeys) remaining.add(json)
+                } catch (_: Exception) {
+                    // Se não conseguiu ler, preserva para não perder dados por acidente
+                    remaining.add(json)
+                }
+            }
+            historyPrefs.edit().putString(OverlayService.KEY_TRIP_HISTORY, gson.toJson(remaining)).apply()
+
+            // Atualiza lista em memória e UI sem recarregar tudo
+            historyList = historyList.filter { it.startTimeMillis !in toRemoveKeys }.toMutableList()
+            historyAdapter.updateData(historyList)
+            showEmptyState(historyList.isEmpty(), if (historyList.isEmpty()) "Histórico vazio." else null)
+
+            // Aplica deltas de turno (valor → 0 e duração → 0)
+            selected.forEach { entry ->
+                try {
+                    val oldEff = getEffectiveValue(entry)
+                    val intent = Intent(this, com.example.smartdriver.overlay.OverlayService::class.java).apply {
+                        action = OverlayService.ACTION_APPLY_SHIFT_DELTA
+                        putExtra(OverlayService.EXTRA_TRIP_START_MS, entry.startTimeMillis)
+                        putExtra(OverlayService.EXTRA_OLD_EFFECTIVE, oldEff)
+                        putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, 0.0)
+                        // NOVO: duração a 0
+                        putExtra(OverlayService.EXTRA_OLD_DURATION_SEC, entry.durationSeconds)
+                        putExtra(OverlayService.EXTRA_NEW_DURATION_SEC, 0L)
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Erro ao deserializar item durante busca para exclusão: ${mutableJsonList[i]}", e)
-                }
+                    startService(intent)
+                } catch (_: Exception) { /* ignora falhas do serviço */ }
             }
 
-            if (indexToRemove != -1) {
-                val oldEff = getEffectiveValue(entryToDelete)
-                val intent = Intent(this, com.example.smartdriver.overlay.OverlayService::class.java).apply {
-                    action = OverlayService.ACTION_APPLY_SHIFT_DELTA
-                    putExtra(OverlayService.EXTRA_TRIP_START_MS, entryToDelete.startTimeMillis)
-                    putExtra(OverlayService.EXTRA_OLD_EFFECTIVE, oldEff)
-                    putExtra(OverlayService.EXTRA_NEW_EFFECTIVE, 0.0)
-                }
-                try { startService(intent) } catch (_: Exception) {}
+            Toast.makeText(this, "Excluídas ${selected.size} entradas.", Toast.LENGTH_LONG).show()
 
-                mutableJsonList.removeAt(indexToRemove)
-                historyPrefs.edit().putString(OverlayService.KEY_TRIP_HISTORY, gson.toJson(mutableJsonList)).apply()
-
-                if (position < historyList.size && historyList[position].startTimeMillis == entryToDelete.startTimeMillis) {
-                    historyList.removeAt(position)
-                    historyAdapter.notifyItemRemoved(position)
-                    historyAdapter.notifyItemRangeChanged(position, historyList.size)
-                    if (historyList.isEmpty()) showEmptyState(true, "Histórico vazio.")
-                } else {
-                    loadHistoryData()
-                }
-            } else {
-                Log.e(TAG, "Não foi possível encontrar a entrada para exclusão.")
-                loadHistoryData()
-            }
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao excluir entrada do histórico: ${e.message}", e)
-            loadHistoryData()
+            Log.e(TAG, "Erro ao excluir entradas selecionadas: ${e.message}", e)
+            Toast.makeText(this, "Erro ao excluir selecionadas.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -348,6 +417,8 @@ class HistoryActivity : AppCompatActivity() {
         val historyJsonStringList = historyPrefs.getString(OverlayService.KEY_TRIP_HISTORY, "[]")
         if (historyJsonStringList.isNullOrEmpty() || historyJsonStringList == "[]") {
             Log.d(TAG, "Histórico vazio.")
+            historyList.clear()
+            historyAdapter.updateData(historyList)
             showEmptyState(true, "Nenhum histórico encontrado.")
             return
         }
@@ -359,18 +430,11 @@ class HistoryActivity : AppCompatActivity() {
                 catch (e: JsonSyntaxException) { Log.e(TAG, "Erro sintaxe JSON entrada: $jsonEntryString", e); null }
                 catch (e: Exception) { Log.e(TAG, "Erro inesperado deserializar entrada: $jsonEntryString", e); null }
             }
-            if (loadedEntries.isEmpty()) {
-                showEmptyState(true, "Nenhum histórico válido.")
-            } else {
-                historyList.clear()
-                historyList.addAll(loadedEntries.sortedByDescending { it.startTimeMillis })
-                historyAdapter.updateData(historyList)
-                showEmptyState(false)
-                Log.i(TAG, "Histórico carregado: ${historyList.size} itens.")
-            }
-        } catch (e: JsonSyntaxException) {
-            Log.e(TAG, "Erro sintaxe JSON lista principal: $historyJsonStringList", e)
-            showEmptyState(true, "Erro ao ler dados.")
+            historyList.clear()
+            historyList.addAll(loadedEntries.sortedByDescending { it.startTimeMillis })
+            historyAdapter.updateData(historyList)
+            showEmptyState(historyList.isEmpty(), if (historyList.isEmpty()) "Nenhum histórico encontrado." else null)
+            Log.i(TAG, "Histórico carregado: ${historyList.size} itens.")
         } catch (e: Exception) {
             Log.e(TAG, "Erro GERAL ao carregar histórico: $historyJsonStringList", e)
             showEmptyState(true, "Erro inesperado.")
@@ -414,85 +478,5 @@ class HistoryActivity : AppCompatActivity() {
             if (num < 0) return null
             if (num <= 600) num * 60 else num
         }
-    }
-
-    /** Preview da screenshot com OCR congelado enquanto o diálogo estiver aberto. */
-    private fun showScreenshotPreview(path: String) {
-        // 0) valida caminho
-        if (path.isBlank()) {
-            Toast.makeText(this, "Screenshot indisponível.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // 1) prepara pulsos de FREEZE para o ScreenCaptureService (900 ms cada)
-        val freezeIntent = Intent(this, ScreenCaptureService::class.java).apply {
-            action = ScreenCaptureService.ACTION_FREEZE_OCR
-        }
-        val resumeIntent = Intent(this, ScreenCaptureService::class.java).apply {
-            action = ScreenCaptureService.ACTION_RESUME_AFTER_PREVIEW
-        }
-        val handler = Handler(Looper.getMainLooper())
-        var keepFreezing = true
-        val freezeTick = object : Runnable {
-            override fun run() {
-                try { startService(freezeIntent) } catch (_: Exception) {}
-                if (keepFreezing) handler.postDelayed(this, 600L) // renova antes dos 900 ms expirarem
-            }
-        }
-
-        // 2) cria a ImageView (carregando redimensionado para não matar memória)
-        val iv = ImageView(this).apply {
-            adjustViewBounds = true
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-
-            // medir
-            val opts = BitmapFactory.Options().apply {
-                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
-                inDither = true
-                inJustDecodeBounds = true
-            }
-            BitmapFactory.decodeFile(path, opts)
-
-            val maxW = resources.displayMetrics.widthPixels * 9 / 10
-            val maxH = resources.displayMetrics.heightPixels * 8 / 10
-            var sample = 1
-            while (opts.outWidth / sample > maxW || opts.outHeight / sample > maxH) {
-                sample *= 2
-            }
-
-            // carregar redimensionado
-            val opts2 = BitmapFactory.Options().apply {
-                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
-                inDither = true
-                inSampleSize = sample
-            }
-            val bmp = try { BitmapFactory.decodeFile(path, opts2) } catch (_: Exception) { null }
-            if (bmp == null) {
-                Toast.makeText(context, "Falha ao abrir screenshot.", Toast.LENGTH_SHORT).show()
-            } else {
-                setImageBitmap(bmp)
-                scaleType = ImageView.ScaleType.FIT_CENTER
-            }
-        }
-
-        // 3) mostra o diálogo e mantém FREEZE até fechar; no fechar envia RESUME
-        val dlg = AlertDialog.Builder(this)
-            .setTitle("Screenshot da oferta")
-            .setView(iv)
-            .setPositiveButton("Fechar", null)
-            .create()
-
-        dlg.setOnShowListener {
-            keepFreezing = true
-            handler.post(freezeTick)           // começa a congelar já
-        }
-        dlg.setOnDismissListener {
-            keepFreezing = false               // pára de renovar FREEZE
-            handler.removeCallbacks(freezeTick)
-            // retoma explicitamente o OCR/captura
-            try { startService(resumeIntent) } catch (_: Exception) {}
-        }
-
-        dlg.show()
     }
 }
