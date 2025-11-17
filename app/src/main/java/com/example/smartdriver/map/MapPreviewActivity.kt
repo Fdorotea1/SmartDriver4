@@ -56,6 +56,7 @@ import com.example.smartdriver.zones.Zone
 import com.example.smartdriver.zones.ZoneRuntime
 import com.example.smartdriver.zones.ZoneType
 import com.example.smartdriver.zones.ZoneRepository
+import com.example.smartdriver.utils.TripOdometer
 
 // JSON (leitura direta do zones.json)
 import com.google.gson.Gson
@@ -92,7 +93,7 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
         const val EXTRA_CARD_OFFER_VALUE           = "extra_card_offer_value"
         const val EXTRA_CARD_EUR_PER_KM            = "extra_card_eur_per_km"
         const val EXTRA_CARD_TOTAL_KM              = "extra_card_total_km"
-        const val EXTRA_CARD_EUR_PER_HOUR_PLANNED  = "extra_card_eur_per_hour_plANNED"
+        const val EXTRA_CARD_EUR_PER_HOUR_PLANNED  = "extra_card_eur_per_hOUR_PLANNED"
 
         // kms e/ou texto de indicação vindos do semáforo (ex: "3.4 km · 16 min")
         const val EXTRA_PICKUP_KM_FROM_CARD       = "EXTRA_PICKUP_KM_FROM_CARD"
@@ -118,6 +119,7 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
     private lateinit var pickupLineView: TextView
     private lateinit var destLineView: TextView
     private lateinit var totalKmView: TextView
+    private lateinit var realKmView: TextView
     private lateinit var zoneBadge: TextView
     private lateinit var orientationToggle: ImageView
 
@@ -180,6 +182,8 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
     private var cardTotalKm: String? = null
     private var cardPickupSuffix: String? = null
     private var cardDestSuffix: String? = null
+
+    private var realRouteKmLabel: String? = null
 
     // última posição atual
     private var lastHere: LatLng? = null
@@ -272,6 +276,9 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
         setFinishOnTouchOutside(true)
         window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         window.setDimAmount(0f)
+
+        // [NOVO] Permitir que toques fora passem para as apps por baixo (ex: Uber)
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
 
         // ---------- UI ROOT ----------
         rootCard = FrameLayout(this).apply {
@@ -383,8 +390,9 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
         val centerContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
+                0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                1f
             ).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
             }
@@ -398,6 +406,8 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
             text = "€/km —"
             setTextColor(Color.WHITE)
             textSize = 22f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -484,11 +494,23 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
         rowBottom.addView(totalKmView)
         rowBottom.addView(closeView)
 
+        // Campo de kms percorridos (odómetro)
+        realKmView = TextView(this).apply {
+            text = "Percorridos —"
+            setTextColor(Color.LTGRAY)
+            textSize = 14f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dp(2), 0, 0)
+            visibility = View.GONE
+        }
+
         // Ordem no card
         headerCard.addView(rowTop)
         headerCard.addView(pickupLineView)
         headerCard.addView(destLineView)
         headerCard.addView(rowBottom)
+        headerCard.addView(realKmView)
 
         if (!showHeader) {
             headerCard.visibility = View.GONE
@@ -664,9 +686,16 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
             fallbackTotal != null -> label(fallbackTotal)
             else                  -> "Total kms —"
         }
+
+        // kms reais (odómetro em tempo real)
+        val real = realRouteKmLabel
+        if (real.isNullOrBlank()) {
+            realKmView.visibility = View.GONE
+        } else {
+            realKmView.visibility = View.VISIBLE
+            realKmView.text = "Percorridos $real km"
+        }
     }
-
-
 
     private fun updateFromExtras(intent: Intent) {
         val seq = ++lastSeq
@@ -1036,11 +1065,12 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
 
             if (map != null) {
                 if (currentMarker == null) {
+                    // Cria o marcador com a NOVA seta (azul, maior, tipo navegação)
                     currentMarker = map.addMarker(
                         MarkerOptions()
                             .position(here)
                             .title("Posição atual")
-                            .icon(arrowDescriptor(Color.BLACK))
+                            .icon(arrowDescriptor()) // Removido argumento de cor, usa default interno
                             .anchor(0.5f, 0.5f)
                             .flat(true)
                             .rotation(bearing)
@@ -1063,6 +1093,11 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
             }
 
             lastHere = here
+
+            // [MODIFICADO]
+            // O "TripOdometer" agora é alimentado pelo OverlayService em background.
+            // Aqui apenas atualizamos o UI lendo o valor atual.
+            updateRealRouteKmLabel()
 
             // Primeira vez com localização válida → usar API de nascer/pôr-do-sol
             if (!twilightUpdatedFromLocation) {
@@ -1190,6 +1225,22 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
             prev = p
         }
         return sum
+    }
+
+    // [MODIFICADO] Lê diretamente do Singleton TripOdometer
+    private fun updateRealRouteKmLabel() {
+        val km = TripOdometer.getKmOrNull(minMeters = 50.0)
+        if (km == null) {
+            realRouteKmLabel = null
+        } else {
+            val formatted = if (km < 100) {
+                String.format(Locale("pt", "PT"), "%.1f", km)
+            } else {
+                String.format(Locale("pt", "PT"), "%.0f", km)
+            }
+            realRouteKmLabel = formatted
+        }
+        updateHeaderTexts()
     }
 
     private fun distanceMeters(a: LatLng, b: LatLng): Double {
@@ -1438,103 +1489,114 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
         return BitmapDescriptorFactory.fromBitmap(bmp)
     }
 
-    // bola branca com aro preto e triângulo preto no centro
-    private fun arrowDescriptor(@Suppress("UNUSED_PARAMETER") color: Int): BitmapDescriptor {
-        val size = dp(32)
+    // Seta de navegação azul (Navigation Arrow)
+    private fun arrowDescriptor(): BitmapDescriptor {
+        val size = dp(48)
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-
         val r = size / 2f
 
-        val circleFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = Color.WHITE
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#4285F4") // Azul Google
             style = Paint.Style.FILL
         }
-        val circleStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = Color.BLACK
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
             style = Paint.Style.STROKE
-            strokeWidth = dp(2).toFloat()
+            strokeWidth = dp(3).toFloat()
+            strokeJoin = Paint.Join.ROUND
         }
-        c.drawCircle(r, r, r - dp(3), circleFill)
-        c.drawCircle(r, r, r - dp(3), circleStroke)
 
-        val triPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = Color.BLACK
-            style = Paint.Style.FILL
-        }
         val path = Path().apply {
-            moveTo(r, r - dp(8))                 // topo
-            lineTo(r - dp(7), r + dp(6))        // canto inf esquerdo
-            lineTo(r + dp(7), r + dp(6))        // canto inf direito
+            moveTo(r, r - dp(14))          // Ponta
+            lineTo(r - dp(10), r + dp(12)) // Canto inf esquerdo
+            lineTo(r, r + dp(8))           // Centro côncavo
+            lineTo(r + dp(10), r + dp(12)) // Canto inf direito
             close()
         }
-        c.drawPath(path, triPaint)
+
+        c.drawPath(path, fillPaint)
+        c.drawPath(path, strokePaint)
 
         return BitmapDescriptorFactory.fromBitmap(bmp)
     }
 
-    // Ícone de bússola: modo Norte
+    // Ícone de bússola: modo Norte (Agulha N/S)
     private fun createCompassNorthIcon(): BitmapDrawable {
-        val size = dp(32)
+        val size = dp(56)
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val r = size / 2f
 
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+        // Fundo
+        val bgFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#F5F5F5")
             style = Paint.Style.FILL
         }
-        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            style = Paint.Style.STROKE
-            strokeWidth = dp(2).toFloat()
-        }
-        c.drawCircle(r, r, r - dp(3), fill)
-        c.drawCircle(r, r, r - dp(3), stroke)
+        c.drawCircle(r, r, r - dp(4), bgFill)
 
-        val triPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.RED
+        // Agulha Norte (Vermelha)
+        val nPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#D32F2F")
             style = Paint.Style.FILL
         }
-        val tri = Path().apply {
-            moveTo(r, r - dp(9))
-            lineTo(r - dp(6), r + dp(6))
-            lineTo(r + dp(6), r + dp(6))
+        val nPath = Path().apply {
+            moveTo(r, r - dp(14))
+            lineTo(r - dp(4), r)
+            lineTo(r + dp(4), r)
             close()
         }
-        c.drawPath(tri, triPaint)
+        c.drawPath(nPath, nPaint)
+
+        // Agulha Sul (Cinza)
+        val sPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#9E9E9E")
+            style = Paint.Style.FILL
+        }
+        val sPath = Path().apply {
+            moveTo(r, r + dp(14))
+            lineTo(r - dp(4), r)
+            lineTo(r + dp(4), r)
+            close()
+        }
+        c.drawPath(sPath, sPaint)
+
+        // Letra N
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = dp(10).toFloat()
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        c.drawText("N", r, r - dp(16), textPaint)
 
         return BitmapDrawable(resources, bmp)
     }
 
-    // Ícone de bússola: modo Direção
+    // Ícone de bússola: modo Direção (Seta de Navegação)
     private fun createCompassDirIcon(): BitmapDrawable {
-        val size = dp(32)
+        val size = dp(56)
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val r = size / 2f
 
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+        // Fundo
+        val bgFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#E3F2FD") // Azul muito claro
             style = Paint.Style.FILL
         }
-        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            style = Paint.Style.STROKE
-            strokeWidth = dp(2).toFloat()
-        }
-        c.drawCircle(r, r, r - dp(3), fill)
-        c.drawCircle(r, r, r - dp(3), stroke)
+        c.drawCircle(r, r, r - dp(4), bgFill)
 
+        // Seta
         val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
+            color = Color.parseColor("#1976D2") // Azul forte
             style = Paint.Style.FILL
         }
         val path = Path().apply {
-            moveTo(r, r - dp(9))              // ponta
-            lineTo(r - dp(5), r + dp(9))      // base esq
-            lineTo(r, r + dp(5))              // recuo
-            lineTo(r + dp(5), r + dp(9))      // base dir
+            moveTo(r, r - dp(12))            // Ponta
+            lineTo(r - dp(7), r + dp(10))    // Base esq
+            lineTo(r, r + dp(6))             // Centro
+            lineTo(r + dp(7), r + dp(10))    // Base dir
             close()
         }
         c.drawPath(path, arrowPaint)
@@ -1637,7 +1699,7 @@ class MapPreviewActivity : AppCompatActivity(), OnMapReadyCallback {
                 items.asSequence()
                     .filter { it.active != false }
                     .mapNotNull { z ->
-                        val ptsSrc = z.points ?: z.pontos
+                        val ptsSrc = z.points ?: z.pontos;
                         val pts = ptsSrc?.mapNotNull { pj ->
                             val la = pj.latitude ?: pj.lat
                             val lo = pj.longitude ?: pj.lon

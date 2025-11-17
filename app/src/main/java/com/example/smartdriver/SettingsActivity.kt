@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.SeekBar
 import android.widget.Toast
@@ -194,13 +195,33 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this, "Padrões restaurados.", Toast.LENGTH_SHORT).show()
         }
 
-        // ► NOVO: botão para abrir o Editor de Zonas (No-Go)
+        // Botão para abrir o Editor de Zonas
         binding.openZoneEditorButton.setOnClickListener {
             try {
                 startActivity(Intent(this, MapEditorActivity::class.java))
             } catch (t: Throwable) {
                 Toast.makeText(this, "Erro ao abrir o Editor de Zonas", Toast.LENGTH_SHORT).show()
             }
+        }
+
+        // -------------------------------------------------------
+        // Botão para Configurações Avançadas (Seguro)
+        // -------------------------------------------------------
+        try {
+            // Procura o botão dinamicamente para evitar erro se o ID não existir
+            val advId = resources.getIdentifier("advancedSettingsButton", "id", packageName)
+            if (advId != 0) {
+                findViewById<View>(advId)?.setOnClickListener {
+                    try {
+                        val intent = Intent(this, Class.forName("com.example.smartdriver.AdvancedSettingsActivity"))
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(this, "Menu avançado não disponível.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignorar erros de setup do botão avançado
         }
     }
 

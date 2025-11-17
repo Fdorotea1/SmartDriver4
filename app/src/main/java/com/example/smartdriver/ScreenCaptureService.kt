@@ -4,14 +4,10 @@ import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.*
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
-import android.graphics.PixelFormat
+import android.graphics.*
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -19,7 +15,6 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
-import android.provider.MediaStore
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
@@ -29,7 +24,6 @@ import com.example.smartdriver.utils.ImageAnalysisUtils
 import com.example.smartdriver.utils.OfferData
 import com.example.smartdriver.utils.OcrTextRecognizer
 import java.text.Normalizer
-import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
@@ -48,17 +42,16 @@ class ScreenCaptureService : Service() {
         const val ACTION_UPDATE_SETTINGS = "com.example.smartdriver.screen_capture.UPDATE_SETTINGS"
         const val ACTION_SAVE_LAST_VALID_OFFER_SCREENSHOT = "com.example.smartdriver.screen_capture.SAVE_LAST_VALID"
 
-        // Congela OCR por curto período (usado na visualização de screenshots do histórico)
         const val ACTION_FREEZE_OCR = "com.example.smartdriver.screen_capture.FREEZE_OCR"
-        // Retoma OCR após fechar a visualização
         const val ACTION_RESUME_AFTER_PREVIEW = "com.example.smartdriver.screen_capture.RESUME_AFTER_PREVIEW"
 
         const val ACTION_OCR_ENABLE = "com.example.smartdriver.screen_capture.OCR_ENABLE"
         const val ACTION_OCR_DISABLE = "com.example.smartdriver.screen_capture.OCR_DISABLE"
         const val ACTION_OCR_REINIT = "com.example.smartdriver.screen_capture.OCR_REINIT"
 
-        // Mantida só para compat (não usada para pedir permissão):
-        const val ACTION_NEED_PROJECTION_CONSENT = "com.example.smartdriver.screen_capture.NEED_CONSENT"
+        // [NOVO] Ações para pausa temporária (Menu Aberto)
+        const val ACTION_PAUSE_CAPTURE = "com.example.smartdriver.ACTION_PAUSE_CAPTURE"
+        const val ACTION_RESUME_CAPTURE = "com.example.smartdriver.ACTION_RESUME_CAPTURE"
 
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
@@ -66,16 +59,17 @@ class ScreenCaptureService : Service() {
 
         @JvmStatic val isRunning = AtomicBoolean(false)
 
+        // Ajustado para processar mais frames por segundo
+        private const val OCR_THROTTLE_MS = 150L
         private const val OCR_IMAGE_SCALE_FACTOR = 1.0f
-        private const val OFFER_PROCESSING_LOCK_PERIOD_MS = 3000L
-        private const val HASH_CACHE_DURATION_MS = 800L
+        private const val OFFER_PROCESSING_LOCK_PERIOD_MS = 1500L // Reduzido para não perder ofertas
+        private const val HASH_CACHE_DURATION_MS = 400L // Cache menor
         private const val KEY_OCR_DESIRED = "ocr_desired_on"
 
-        /** Hard-off da persistência de screenshots (histórico sem imagens). */
-        private const val DISABLE_SCREENSHOT_PERSISTENCE = true
+        private const val START_PROMPT_DEBOUNCE_MS = 3500L
     }
 
-    // Projeção / Captura
+    // --- Hardware de Captura ---
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
@@ -83,9 +77,11 @@ class ScreenCaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
-    // Estado/Threads
+    // --- Estado e Threads ---
     private val isCapturingActive = AtomicBoolean(false)
     private val isProcessingImage = AtomicBoolean(false)
+    private var lastProcessingStartTime = 0L
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var processingThread: HandlerThread
     private lateinit var processingHandler: Handler
@@ -93,120 +89,47 @@ class ScreenCaptureService : Service() {
     @Volatile private var ocrEnabled: Boolean = true
     private lateinit var preferences: SharedPreferences
     @Volatile private var userStopRequested: Boolean = false
+    @Volatile private var waitingForReauth: Boolean = false
 
-    // OCR / análise
+    // [NOVO] Pausa temporária quando o menu está aberto
+    @Volatile private var isPausedByMenu: Boolean = false
+
+    // --- Otimização de Memória (Single Pass) ---
+    private var workingBitmap: Bitmap? = null
+    private val processPaint = Paint()
+    private val processColorMatrix = ColorMatrix()
+
+    // --- OCR e Análise ---
     private val imageAnalysisUtils = ImageAnalysisUtils()
     private val ocr: OcrTextRecognizer = OcrTextRecognizer.getInstance()
 
-    // Duplicação/recência
+    // --- Variáveis de Sessão ---
+    @Volatile private var inFlightPickupLatch: Boolean = false
+    @Volatile private var currentTripId: String? = null
+
+    // Cache e Deduplicação
     @Volatile private var lastOfferDetectedTime = 0L
     private var lastDetectedOfferSignature: String? = null
-
-    // Hash cache
     private var lastScreenHash: Int? = null
     private var lastHashTime: Long = 0L
 
-    // Screenshot pendente (buffer estável) — **não será mais persistido**
-    @Volatile private var lastBitmapForPotentialSave: Bitmap? = null
-    private var screenshotCounter = 0
-
-    // Freeze curto
     @Volatile private var ocrFreezeUntil = 0L
+    @Volatile private var lastStartPromptMs: Long = 0L
 
-    // Buffer CANDIDATO (instantâneo da primeira deteção) — mantemos para não alterar o fluxo
+    // Buffers
+    @Volatile private var lastBitmapForPotentialSave: Bitmap? = null
     @Volatile private var lastCandidateBitmap: Bitmap? = null
     @Volatile private var lastCandidateSignature: String? = null
     @Volatile private var lastCandidateTime: Long = 0L
 
-    // Meta buffers / dedupe
-    @Volatile private var bufferedOfferSignature: String? = null
-    @Volatile private var lastSavedOfferSignature: String? = null
-    @Volatile private var lastSavedTime: Long = 0L
-
-    // NOVO: oferta em espera para a viagem seguinte (desativado para persistência)
-    @Volatile private var nextOfferBitmap: Bitmap? = null
-    @Volatile private var nextOfferSignature: String? = null
-
-    // Coordenação com Overlay (latch do “A recolher”)
-    @Volatile private var inFlightPickupLatch: Boolean = false
-    @Volatile private var currentTripId: String? = null
-
-    // STEP 3 — Debounce do popup "Acompanhar viagem"
-    @Volatile private var lastStartPromptMs: Long = 0L
-    private val START_PROMPT_DEBOUNCE_MS = 3500L
-
-    private fun isOcrAllowedNow(): Boolean = System.currentTimeMillis() >= ocrFreezeUntil
-    fun freezeOcrFor(ms: Long = 900L) { ocrFreezeUntil = System.currentTimeMillis() + ms }
-
-    // Estabilidade multi-frame
-    private class StabilityWindow(
-        private val windowMs: Long = 1200L,
-        private val minVotes: Int = 3
-    ) {
-        private data class Item(val sig: String, val t: Long, val data: OfferData)
-        private val items = ArrayDeque<Item>()
-        fun add(candidate: OfferData): OfferData? {
-            val now = System.currentTimeMillis()
-            val sig = candidateSignature(candidate)
-            items.addLast(Item(sig, now, candidate))
-            while (items.isNotEmpty() && now - items.first.t > windowMs) items.removeFirst()
-            val counts = mutableMapOf<String, Int>()
-            for (it in items) counts[it.sig] = (counts[it.sig] ?: 0) + 1
-            val bestSig = counts.maxByOrNull { it.value }?.key ?: return null
-            val votes = counts[bestSig] ?: 0
-            return if (votes >= minVotes) items.lastOrNull { it.sig == bestSig }?.data else null
-        }
-        private fun candidateSignature(o: OfferData): String {
-            fun n(s: String?) = (s ?: "").replace(",", ".").trim()
-            return "v:${n(o.value)}|pd:${n(o.pickupDistance)}|td:${n(o.tripDistance)}|pt:${n(o.pickupDuration)}|tt:${n(o.tripDuration)}"
-        }
-        fun clear() = items.clear()
-    }
-    private val stability = StabilityWindow(windowMs = 1200L, minVotes = 3)
-
-    // Regras
-    private data class BizRules(
-        val minEurPerKm: Double = 0.38,
-        val minMinutes: Int = 7,
-        val lowFareThreshold: Double = 3.50,
-        val shortTotalKm: Double = 8.0,
-        val maxPickupRatio: Double = 0.80,
-        val maxAbsurdPrice: Double = 100.0
-    )
-    private val rules = BizRules()
-    private enum class Verdict { VALID, SUSPECT, INVALID }
-
-    private fun classify(stable: OfferData): Verdict {
-        fun d(s: String?) = s?.replace(",", ".")?.toDoubleOrNull()
-        fun i(s: String?) = s?.toIntOrNull()
-
-        val price = d(stable.value) ?: return Verdict.INVALID
-        if (price <= 0.2) return Verdict.INVALID
-        if (price > rules.maxAbsurdPrice) return Verdict.INVALID
-
-        val pd = d(stable.pickupDistance) ?: 0.0
-        val td = d(stable.tripDistance) ?: 0.0
-        val pt = i(stable.pickupDuration) ?: 0
-        val tt = i(stable.tripDuration) ?: 0
-
-        val totalKm = (pd + td).takeIf { it > 0 } ?: td
-        val totalMin = (pt + tt).takeIf { it > 0 } ?: tt
-
-        val isLowShort = price <= rules.lowFareThreshold && totalKm <= rules.shortTotalKm
-
-        val eurKm = if (totalKm > 0.05) price / totalKm else Double.POSITIVE_INFINITY
-        val priceOk = isLowShort || eurKm >= rules.minEurPerKm
-        val timeOk  = isLowShort || totalMin >= rules.minMinutes
-        val pickupOk = if (totalKm <= 0.1) true else (pd <= rules.maxPickupRatio * totalKm)
-
-        val nearPrice = !priceOk && eurKm >= (rules.minEurPerKm * 0.9)
-        val nearTime  = !timeOk  && totalMin >= (rules.minMinutes - 1)
-        val nearPickup = !pickupOk && totalKm > 0.1 && pd <= (rules.maxPickupRatio * 1.1) * totalKm
-
-        return when {
-            priceOk && timeOk && pickupOk -> Verdict.VALID
-            nearPrice || nearTime || nearPickup -> Verdict.SUSPECT
-            else -> Verdict.INVALID
+    // --- Receivers ---
+    private val screenUnlockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                if (waitingForReauth && !userStopRequested) {
+                    triggerPermissionRequest()
+                }
+            }
         }
     }
 
@@ -216,11 +139,8 @@ class ScreenCaptureService : Service() {
                 OverlayService.ACTION_EVT_TRACKING_STARTED -> {
                     inFlightPickupLatch = true
                     currentTripId = try { i.getStringExtra(OverlayService.EXTRA_TRIP_ID) } catch (_: Exception) { null }
-                    Log.i(TAG, "EVENT: tracking started → latch ON (tripId=$currentTripId)")
-
-                    // **Persistência de screenshot desativada**
                     processingHandler.post {
-                        recyclePotentialSaveBitmap("persistência desativada (tracking started)")
+                        recyclePotentialSaveBitmap("tracking started")
                         try { if (lastCandidateBitmap != null && !lastCandidateBitmap!!.isRecycled) lastCandidateBitmap!!.recycle() } catch (_: Exception) {}
                         lastCandidateBitmap = null
                     }
@@ -230,15 +150,74 @@ class ScreenCaptureService : Service() {
                     currentTripId = null
                     stability.clear()
                     lastDetectedOfferSignature = null
-                    Log.i(TAG, "EVENT: tracking ended → latch OFF")
-
-                    // **Sem promover oferta em espera; limpa e recicla buffers**
-                    try { nextOfferBitmap?.recycle() } catch (_: Exception) {}
-                    nextOfferBitmap = null; nextOfferSignature = null
                     recyclePotentialSaveBitmap("tracking ended")
                 }
             }
         }
+    }
+
+    private fun isOcrAllowedNow(): Boolean = System.currentTimeMillis() >= ocrFreezeUntil
+    fun freezeOcrFor(ms: Long = 900L) { ocrFreezeUntil = System.currentTimeMillis() + ms }
+
+    // --- Estabilidade Inteligente (Fast Track) ---
+    private class StabilityWindow(private val windowMs: Long = 1000L) { // Janela mais curta
+        private data class Item(val sig: String, val t: Long, val data: OfferData)
+        private val items = ArrayDeque<Item>()
+
+        fun add(candidate: OfferData): OfferData? {
+            val now = System.currentTimeMillis()
+            val sig = candidateSignature(candidate)
+
+            // Limpar itens antigos
+            items.addLast(Item(sig, now, candidate))
+            while (items.isNotEmpty() && now - items.first.t > windowMs) items.removeFirst()
+
+            val counts = mutableMapOf<String, Int>()
+            for (it in items) counts[it.sig] = (counts[it.sig] ?: 0) + 1
+
+            val bestSig = counts.maxByOrNull { it.value }?.key ?: return null
+            val votes = counts[bestSig] ?: 0
+            val bestData = items.lastOrNull { it.sig == bestSig }?.data ?: return null
+
+            // Lógica "Fast Track":
+            // Se a oferta parece completa (tem preço, dist e tempo), aceita com menos votos (2).
+            // Se for uma leitura parcial, exige confirmação (3).
+            val isComplete = bestData.value.isNotEmpty() &&
+                    (bestData.tripDistance.isNotEmpty() || bestData.tripDuration.isNotEmpty())
+
+            val requiredVotes = if (isComplete) 2 else 3
+
+            return if (votes >= requiredVotes) bestData else null
+        }
+
+        private fun candidateSignature(o: OfferData): String {
+            fun n(s: String?) = (s ?: "").replace(",", ".").trim()
+            return "v:${n(o.value)}|pd:${n(o.pickupDistance)}|td:${n(o.tripDistance)}|pt:${n(o.pickupDuration)}|tt:${n(o.tripDuration)}"
+        }
+        fun clear() = items.clear()
+    }
+
+    private val stability = StabilityWindow(windowMs = 1000L)
+
+    private data class BizRules(
+        val minEurPerKm: Double = 0.38,
+        val minMinutes: Int = 5,
+        val lowFareThreshold: Double = 2.50,
+        val shortTotalKm: Double = 8.0,
+        val maxPickupRatio: Double = 0.85,
+        val maxAbsurdPrice: Double = 200.0
+    )
+    private val rules = BizRules()
+    private enum class Verdict { VALID, SUSPECT, INVALID }
+
+    private fun classify(stable: OfferData): Verdict {
+        fun d(s: String?) = s?.replace(",", ".")?.toDoubleOrNull()
+        val price = d(stable.value) ?: return Verdict.INVALID
+
+        if (price <= 0.1) return Verdict.INVALID
+        if (price > rules.maxAbsurdPrice) return Verdict.INVALID
+
+        return Verdict.VALID
     }
 
     override fun onCreate() {
@@ -249,25 +228,16 @@ class ScreenCaptureService : Service() {
         ocrEnabled = preferences.getBoolean(KEY_OCR_DESIRED, true)
         userStopRequested = false
 
+        setupProcessPaint()
+
         processingThread = HandlerThread("ImageProcessingThread", Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
         processingHandler = Handler(processingThread.looper)
 
         getScreenMetrics()
-        startForeground(NOTIFICATION_ID, createNotification("SmartDriver ativo"))
+        startForeground(NOTIFICATION_ID, createNotification("SmartDriver ativo", false))
 
-        // Watchdog
-        mainHandler.postDelayed(object : Runnable {
-            override fun run() {
-                try {
-                    if (isRunning.get() && ocrEnabled && !userStopRequested && !isCapturingActive.get()) {
-                        if (hasValidProjectionData()) {
-                            tryStartCaptureWithoutPrompt("watchdog")
-                        }
-                    }
-                } catch (_: Exception) {}
-                finally { mainHandler.postDelayed(this, 5000L) }
-            }
-        }, 3000L)
+        val filter = IntentFilter(Intent.ACTION_USER_PRESENT)
+        registerReceiver(screenUnlockReceiver, filter)
 
         val flt = IntentFilter().apply {
             addAction(OverlayService.ACTION_EVT_TRACKING_STARTED)
@@ -275,44 +245,97 @@ class ScreenCaptureService : Service() {
         }
         try { registerReceiver(overlayEventsReceiver, flt) } catch (_: Exception) {}
 
-        updateNotification(if (ocrEnabled) "SmartDriver pronto" else "SmartDriver (OCR desligado)")
+        if (MediaProjectionData.isValid()) {
+            setupMediaProjection()
+            startScreenCaptureInternal()
+        }
+
+        // Watchdog
+        mainHandler.postDelayed(object : Runnable {
+            override fun run() {
+                try {
+                    if (isProcessingImage.get()) {
+                        if (System.currentTimeMillis() - lastProcessingStartTime > 2000L) {
+                            Log.w(TAG, "Watchdog: Processamento encravado. Reset.")
+                            isProcessingImage.set(false)
+                        }
+                    }
+                    if (isRunning.get() && ocrEnabled && !userStopRequested &&
+                        !waitingForReauth && !isCapturingActive.get() && MediaProjectionData.isValid()) {
+                        startScreenCaptureInternal()
+                    }
+                } catch (_: Exception) {}
+                finally {
+                    mainHandler.postDelayed(this, 2000L)
+                }
+            }
+        }, 2000L)
+    }
+
+    private fun setupProcessPaint() {
+        val contrastValue = 1.5f
+        val brightnessValue = -(128 * (contrastValue - 1))
+        processColorMatrix.set(floatArrayOf(
+            contrastValue, 0f, 0f, 0f, brightnessValue,
+            0f, contrastValue, 0f, 0f, brightnessValue,
+            0f, 0f, contrastValue, 0f, brightnessValue,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        processPaint.colorFilter = ColorMatrixColorFilter(processColorMatrix)
+        processPaint.isFilterBitmap = true
+        processPaint.isDither = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Dados de consentimento opcionais vindos da Activity
-        if (intent?.hasExtra(EXTRA_RESULT_CODE) == true && intent.hasExtra(EXTRA_RESULT_DATA)) {
+        if (intent != null &&
+            intent.hasExtra(EXTRA_RESULT_CODE) &&
+            intent.hasExtra(EXTRA_RESULT_DATA)
+        ) {
             val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
-            val data = getParcelableExtraCompat(intent, EXTRA_RESULT_DATA, Intent::class.java)?.clone() as? Intent
+            val data: Intent? = getParcelableExtraCompat(intent, EXTRA_RESULT_DATA, Intent::class.java)
+
             if (code == Activity.RESULT_OK && data != null) {
                 MediaProjectionData.resultCode = code
                 MediaProjectionData.resultData = data
-                Log.i(TAG, "Consentimento recebido da Activity (armazenado em MediaProjectionData).")
-                if (ocrEnabled && !userStopRequested && !isCapturingActive.get()) {
-                    setupMediaProjection()
-                    startScreenCaptureInternal()
-                }
+
+                waitingForReauth = false
+                userStopRequested = false
+                ocrEnabled = true
+
+                setupMediaProjection()
+                startScreenCaptureInternal()
             } else {
-                updateNotification("SmartDriver (autorização negada)")
+                updateNotification("Permissão negada.", true)
             }
         }
 
         when (intent?.action) {
+            // [NOVO] Pausa/Retoma pelo Menu da App
+            ACTION_PAUSE_CAPTURE -> {
+                isPausedByMenu = true
+            }
+            ACTION_RESUME_CAPTURE -> {
+                isPausedByMenu = false
+            }
+
             ACTION_STOP_CAPTURE, ACTION_OCR_DISABLE -> {
                 preferences.edit().putBoolean(KEY_OCR_DESIRED, false).apply()
                 ocrEnabled = false
                 userStopRequested = true
-                stopScreenCaptureInternal()
-                updateNotification("SmartDriver (captura parada)")
+                waitingForReauth = false
+                stopCaptureResources()
+                updateNotification("SmartDriver (captura parada)", true)
             }
 
             ACTION_OCR_ENABLE -> {
                 preferences.edit().putBoolean(KEY_OCR_DESIRED, true).apply()
                 ocrEnabled = true
                 userStopRequested = false
-                if (hasValidProjectionData()) {
-                    tryStartCaptureWithoutPrompt("enable-with-existing-data")
+                if (MediaProjectionData.isValid()) {
+                    setupMediaProjection()
+                    startScreenCaptureInternal()
                 } else {
-                    updateNotification("SmartDriver pronto (aguardar autorização)")
+                    triggerPermissionRequest()
                 }
             }
 
@@ -323,7 +346,7 @@ class ScreenCaptureService : Service() {
                     reinitCapturePipeline()
                 } else {
                     ocrEnabled = false
-                    updateNotification("SmartDriver (OCR desligado)")
+                    updateNotification("SmartDriver (OCR desligado)", true)
                 }
             }
 
@@ -333,56 +356,45 @@ class ScreenCaptureService : Service() {
                 }
             }
 
-            ACTION_SAVE_LAST_VALID_OFFER_SCREENSHOT -> {
-                // **Desativado**: não guarda mais screenshots
-                processingHandler.post { recyclePotentialSaveBitmap("save manual desativado") }
-            }
-
-            ACTION_UPDATE_SETTINGS -> {
-                // **Ignora pedidos para gravar imagens** e força off
-                if (intent.hasExtra(KEY_SAVE_IMAGES)) {
-                    preferences.edit().putBoolean(KEY_SAVE_IMAGES, false).apply()
-                    processingHandler.post { recyclePotentialSaveBitmap("config forçada OFF") }
-                }
-            }
-
             ACTION_FREEZE_OCR -> freezeOcrFor(900L)
 
             ACTION_RESUME_AFTER_PREVIEW -> {
                 ocrFreezeUntil = 0L
-                if (!isCapturingActive.get() && hasValidProjectionData() && ocrEnabled && !userStopRequested) {
-                    tryStartCaptureWithoutPrompt("resume-after-preview")
+                if (!isCapturingActive.get() && MediaProjectionData.isValid() && ocrEnabled && !userStopRequested) {
+                    startScreenCaptureInternal()
                 }
             }
         }
         return START_STICKY
     }
 
-    private fun shouldAutoRestart(): Boolean {
-        return isRunning.get() && ocrEnabled && !userStopRequested && preferences.getBoolean(KEY_OCR_DESIRED, true)
-    }
-
-    private fun hasValidProjectionData(): Boolean {
-        return MediaProjectionData.resultCode == Activity.RESULT_OK && MediaProjectionData.resultData != null
-    }
-
-    private fun tryStartCaptureWithoutPrompt(reason: String) {
-        if (!ocrEnabled || userStopRequested) return
-        if (!hasValidProjectionData()) return
-        if (mediaProjection == null) setupMediaProjection()
-        if (imageReader == null) setupImageReader()
-        startScreenCaptureInternal()
-        if (isCapturingActive.get()) updateNotification("SmartDriver a monitorizar…")
+    private fun triggerPermissionRequest() {
+        try {
+            val i = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra("AUTO_REQUEST_PERMISSION", true)
+            }
+            startActivity(i)
+            updateNotification("A solicitar permissão...", false)
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro triggerPermissionRequest: ${e.message}")
+        }
     }
 
     private fun reinitCapturePipeline() {
-        stopScreenCaptureInternal()
+        stopCaptureResources()
         stability.clear()
         lastScreenHash = null
         lastDetectedOfferSignature = null
         lastOfferDetectedTime = 0L
         inFlightPickupLatch = false
-        mainHandler.postDelayed({ tryStartCaptureWithoutPrompt("reinit") }, 250L)
+        isProcessingImage.set(false)
+        mainHandler.postDelayed({
+            if (MediaProjectionData.isValid()) {
+                setupMediaProjection()
+                startScreenCaptureInternal()
+            }
+        }, 250L)
     }
 
     private fun <T : Any?> getParcelableExtraCompat(intent: Intent?, key: String, clazz: Class<T>): T? {
@@ -422,25 +434,16 @@ class ScreenCaptureService : Service() {
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
                     if (userStopRequested) return
-                    Log.w(TAG, "MediaProjection onStop() – captura parada externamente.")
-                    isCapturingActive.set(false)
-
-                    try { virtualDisplay?.release() } catch (_: Exception) {}
-                    virtualDisplay = null
-                    try { imageReader?.close() } catch (_: Exception) {}
-                    imageReader = null
-                    mediaProjection = null
-
-                    if (shouldAutoRestart() && hasValidProjectionData()) {
-                        mainHandler.postDelayed({ tryStartCaptureWithoutPrompt("mp.onStop") }, 800L)
-                    } else {
-                        updateNotification("SmartDriver (aguardar autorização)")
-                    }
+                    Log.w(TAG, "MediaProjection onStop() – Sistema parou captura.")
+                    stopCaptureResources()
+                    MediaProjectionData.clear()
+                    waitingForReauth = true
+                    updateNotification("Pausa (Ecrã desligado). Toque para retomar.", true)
                 }
             }, mainHandler)
             setupImageReader()
         } catch (e: Exception) {
-            Log.e(TAG, "Erro MediaProjection: ${e.message}", e)
+            MediaProjectionData.clear()
             mediaProjection = null
         }
     }
@@ -452,7 +455,6 @@ class ScreenCaptureService : Service() {
             imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
             imageReader?.setOnImageAvailableListener({ reader -> processAvailableImage(reader) }, processingHandler)
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ImageReader: ${e.message}", e)
             imageReader = null
         }
     }
@@ -478,77 +480,174 @@ class ScreenCaptureService : Service() {
                 processingHandler
             )
             isCapturingActive.set(true)
-            updateNotification("SmartDriver a monitorizar…")
+            waitingForReauth = false
+            updateNotification("SmartDriver a monitorizar…", false)
         } catch (e: Exception) {
-            Log.e(TAG, "Erro VirtualDisplay: ${e.message}", e)
             isCapturingActive.set(false)
         }
     }
 
-    private fun stopScreenCaptureInternal() {
-        if (!isCapturingActive.getAndSet(false)) {
-            try { virtualDisplay?.release() } catch (_: Exception) {} finally { virtualDisplay = null }
-            try { imageReader?.close() } catch (_: Exception) {} finally { imageReader = null }
-            try { mediaProjection?.stop() } catch (_: Exception) {} finally { mediaProjection = null }
-            return
-        }
+    private fun stopCaptureResources() {
+        isCapturingActive.set(false)
         try { virtualDisplay?.release() } catch (_: Exception) {} finally { virtualDisplay = null }
         try { imageReader?.close() } catch (_: Exception) {} finally { imageReader = null }
         try { mediaProjection?.stop() } catch (_: Exception) {} finally { mediaProjection = null }
+
+        try { workingBitmap?.recycle() } catch (_: Exception) {} finally { workingBitmap = null }
+
         isProcessingImage.set(false)
         lastScreenHash = null
-        if (::processingThread.isInitialized && processingThread.isAlive) {
-            processingHandler.post { recyclePotentialSaveBitmap("captura parada") }
-        } else {
-            recyclePotentialSaveBitmap("captura parada")
-        }
-        updateNotification("SmartDriver (captura parada)")
     }
 
     private fun processAvailableImage(reader: ImageReader?) {
-        if (reader == null || !isCapturingActive.get() || !ocrEnabled || userStopRequested) return
+        // [NOVO] Bloqueia processamento se isPausedByMenu for true
+        if (reader == null || !isCapturingActive.get() || !ocrEnabled || userStopRequested || isPausedByMenu) {
+            try { reader?.acquireLatestImage()?.close() } catch (_: Exception) {}
+            return
+        }
+
+        if (!isProcessingImage.compareAndSet(false, true)) {
+            try { reader.acquireLatestImage()?.close() } catch (_: Exception) {}
+            return
+        }
+
+        lastProcessingStartTime = System.currentTimeMillis()
 
         val now = System.currentTimeMillis()
-        if (now - lastOfferDetectedTime < OFFER_PROCESSING_LOCK_PERIOD_MS / 2) {
-            reader.acquireLatestImage()?.close(); return
-        }
-        if (!isOcrAllowedNow()) { reader.acquireLatestImage()?.close(); return }
-        if (!isProcessingImage.compareAndSet(false, true)) {
-            reader.acquireLatestImage()?.close(); return
+        if (now - lastOfferDetectedTime < 300L) {
+            isProcessingImage.set(false)
+            try { reader.acquireLatestImage()?.close() } catch (_: Exception) {}
+            return
         }
 
         var image: Image? = null
-        var originalBitmap: Bitmap? = null
+        var rawBitmap: Bitmap? = null
+
         try {
             image = reader.acquireLatestImage()
-            if (image == null) { isProcessingImage.set(false); return }
-            originalBitmap = imageToBitmap(image)
-            image.close(); image = null
+            if (image == null) {
+                isProcessingImage.set(false)
+                return
+            }
 
-            if (originalBitmap == null) { isProcessingImage.set(false); return }
+            rawBitmap = imageToRawBitmap(image)
+            image.close()
+            image = null
 
-            val hash = calculateImageHash(originalBitmap)
+            if (rawBitmap == null) {
+                isProcessingImage.set(false)
+                return
+            }
+
+            val roi = imageAnalysisUtils.getRegionsOfInterest(rawBitmap.width, rawBitmap.height).first()
+
+            val scale = OCR_IMAGE_SCALE_FACTOR
+            val targetWidth = (roi.width() * scale).toInt()
+            val targetHeight = (roi.height() * scale).toInt()
+
+            if (workingBitmap == null || workingBitmap?.width != targetWidth || workingBitmap?.height != targetHeight) {
+                workingBitmap?.recycle()
+                workingBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+            }
+
+            val canvas = Canvas(workingBitmap!!)
+            val srcRect = Rect(roi.left, roi.top, roi.right, roi.bottom)
+            val dstRect = Rect(0, 0, targetWidth, targetHeight)
+
+            canvas.drawBitmap(rawBitmap, srcRect, dstRect, processPaint)
+
+            rawBitmap.recycle()
+            rawBitmap = null
+
+            val hash = calculateImageHash(workingBitmap!!)
             val tHash = System.currentTimeMillis()
             if (tHash - lastHashTime < HASH_CACHE_DURATION_MS && hash == lastScreenHash) {
-                originalBitmap.recycle(); originalBitmap = null
-                isProcessingImage.set(false); return
+                isProcessingImage.set(false)
+                return
             }
-            lastScreenHash = hash; lastHashTime = tHash
+            lastScreenHash = hash
+            lastHashTime = tHash
 
-            val roi = imageAnalysisUtils.getRegionsOfInterest(originalBitmap.width, originalBitmap.height).firstOrNull()
-            val bitmapToAnalyze: Bitmap = if (roi != null && !roi.isEmpty && roi.width() > 0 && roi.height() > 0) {
-                imageAnalysisUtils.cropToRegion(originalBitmap, roi) ?: originalBitmap
-            } else originalBitmap
+            val bitmapForOcr = workingBitmap!!.copy(Bitmap.Config.ARGB_8888, false)
 
-            if (bitmapToAnalyze !== originalBitmap && !originalBitmap.isRecycled) originalBitmap.recycle()
+            processBitmapForOcr(bitmapForOcr)
 
-            processBitmapRegion(bitmapToAnalyze, screenWidth, screenHeight, "ROI")
-        } catch (_: Exception) {
-            originalBitmap?.recycle(); image?.close(); isProcessingImage.set(false)
+        } catch (e: Exception) {
+            image?.close()
+            rawBitmap?.recycle()
+            isProcessingImage.set(false)
+            Log.e(TAG, "Erro processAvailableImage: ${e.message}")
         }
     }
 
-    private fun imageToBitmap(image: Image): Bitmap? {
+    private fun processBitmapForOcr(bitmapForOcr: Bitmap) {
+        try {
+            // CORREÇÃO AQUI: Removido .toInt(), passando OCR_THROTTLE_MS (Long) diretamente
+            ocr.processThrottled(bitmapForOcr, 0, OCR_THROTTLE_MS)
+                .addOnSuccessListener listener@{ visionText ->
+                    val extractedText = visionText.text
+                    if (extractedText.isBlank()) return@listener
+
+                    if (!inFlightPickupLatch && containsPickupKeyword(extractedText)) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastStartPromptMs >= START_PROMPT_DEBOUNCE_MS) {
+                            lastStartPromptMs = now
+                            try {
+                                val intent = Intent(this, OverlayService::class.java).apply {
+                                    action = OverlayService.ACTION_CONFIRM_START_TRACKING
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    startForegroundService(intent)
+                                } else {
+                                    startService(intent)
+                                }
+                            } catch (_: Exception) { }
+                        }
+                    }
+
+                    val offerData = imageAnalysisUtils.analyzeTextForOffer(
+                        visionText, bitmapForOcr.width, bitmapForOcr.height)
+
+                    if (offerData == null || !offerData.isValid()) return@listener
+
+                    try {
+                        lastCandidateSignature = createOfferSignature(offerData)
+                        lastCandidateTime = System.currentTimeMillis()
+                    } catch (_: Exception) {}
+
+                    val stable = stability.add(offerData) ?: return@listener
+
+                    when (classify(stable)) {
+                        Verdict.INVALID -> return@listener
+                        Verdict.SUSPECT, Verdict.VALID -> {
+                            val offerSignature = createOfferSignature(stable)
+                            val since = System.currentTimeMillis() - lastOfferDetectedTime
+
+                            if (since < OFFER_PROCESSING_LOCK_PERIOD_MS && offerSignature == lastDetectedOfferSignature) {
+                                return@listener
+                            }
+
+                            lastOfferDetectedTime = System.currentTimeMillis()
+                            lastDetectedOfferSignature = offerSignature
+
+                            Handler(Looper.getMainLooper()).post {
+                                OfferManager.getInstance(applicationContext).processOffer(stable)
+                            }
+                        }
+                    }
+                }
+                .addOnFailureListener { }
+                .addOnCompleteListener {
+                    if (!bitmapForOcr.isRecycled) bitmapForOcr.recycle()
+                    isProcessingImage.set(false)
+                }
+        } catch (e: Exception) {
+            if (!bitmapForOcr.isRecycled) bitmapForOcr.recycle()
+            isProcessingImage.set(false)
+        }
+    }
+
+    private fun imageToRawBitmap(image: Image): Bitmap? {
         if (image.format != PixelFormat.RGBA_8888) return null
         val planes = image.planes
         if (planes.isEmpty()) return null
@@ -557,21 +656,20 @@ class ScreenCaptureService : Service() {
         val rowStride = planes[0].rowStride
         if (pixelStride <= 0 || rowStride <= 0) return null
         val rowPadding = max(0, rowStride - pixelStride * image.width)
+
         return try {
             val padWidth = image.width + rowPadding / pixelStride
             if (padWidth <= 0 || image.height <= 0) return null
+
             val bmpPad = Bitmap.createBitmap(padWidth, image.height, Bitmap.Config.ARGB_8888)
             bmpPad.copyPixelsFromBuffer(buffer)
-            if (rowPadding == 0) bmpPad
-            else {
-                val finalBmp = Bitmap.createBitmap(bmpPad, 0, 0, image.width.coerceAtLeast(1), image.height.coerceAtLeast(1))
-                bmpPad.recycle(); finalBmp
-            }
+
+            bmpPad
         } catch (_: Throwable) { null }
     }
 
     private fun calculateImageHash(bitmap: Bitmap): Int {
-        val scaleSize = 64
+        val scaleSize = 32
         return try {
             val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaleSize, scaleSize, true)
             val pixels = IntArray(scaleSize * scaleSize)
@@ -579,171 +677,6 @@ class ScreenCaptureService : Service() {
             scaledBitmap.recycle()
             pixels.contentHashCode()
         } catch (_: Exception) { bitmap.hashCode() }
-    }
-
-    private fun preprocessBitmapForOcr(originalBitmap: Bitmap?): Bitmap? {
-        if (originalBitmap == null || originalBitmap.isRecycled) return originalBitmap
-        var processedBitmap: Bitmap? = null
-        return try {
-            processedBitmap = Bitmap.createBitmap(originalBitmap.width, originalBitmap.height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(processedBitmap)
-            val paint = Paint()
-            val contrastValue = 1.5f
-            val brightnessValue = -(128 * (contrastValue - 1))
-            val colorMatrix = ColorMatrix(floatArrayOf(
-                contrastValue, 0f, 0f, 0f, brightnessValue,
-                0f, contrastValue, 0f, 0f, brightnessValue,
-                0f, 0f, contrastValue, 0f, brightnessValue,
-                0f, 0f, 0f, 1f, 0f
-            ))
-            paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
-            canvas.drawBitmap(originalBitmap, 0f, 0f, paint)
-            processedBitmap
-        } catch (_: OutOfMemoryError) {
-            processedBitmap?.recycle(); null
-        } catch (_: Exception) {
-            processedBitmap?.recycle(); originalBitmap
-        }
-    }
-
-    private fun processBitmapRegion(bitmapToProcess: Bitmap, originalWidth: Int, originalHeight: Int, regionTag: String) {
-        var bitmapAfterResize: Bitmap? = null
-        var bitmapPreprocessed: Bitmap? = null
-        var bitmapCopyForListeners: Bitmap? = null
-
-        try {
-            val scaleFactor = OCR_IMAGE_SCALE_FACTOR
-            bitmapAfterResize = if (abs(scaleFactor - 1.0f) > 0.01f) {
-                val nw = (bitmapToProcess.width * scaleFactor).toInt()
-                val nh = (bitmapToProcess.height * scaleFactor).toInt()
-                if (nw > 0 && nh > 0) Bitmap.createScaledBitmap(bitmapToProcess, nw, nh, true) else bitmapToProcess
-            } else bitmapToProcess
-
-            if (bitmapAfterResize == null || bitmapAfterResize.isRecycled) {
-                if (bitmapToProcess !== bitmapAfterResize && !bitmapToProcess.isRecycled) bitmapToProcess.recycle()
-                isProcessingImage.compareAndSet(true, false); return
-            }
-
-            bitmapPreprocessed = preprocessBitmapForOcr(bitmapAfterResize)
-            if (bitmapPreprocessed == null || bitmapPreprocessed.isRecycled) {
-                if (bitmapAfterResize !== bitmapToProcess && !bitmapAfterResize.isRecycled) bitmapAfterResize.recycle()
-                if (bitmapToProcess !== bitmapAfterResize && !bitmapToProcess.isRecycled) bitmapToProcess.recycle()
-                isProcessingImage.compareAndSet(true, false); return
-            }
-
-            try {
-                bitmapCopyForListeners = bitmapPreprocessed.copy(bitmapPreprocessed.config ?: Bitmap.Config.ARGB_8888, false)
-            } catch (_: Exception) { bitmapCopyForListeners = null }
-
-            if (bitmapPreprocessed !== bitmapAfterResize && !bitmapAfterResize.isRecycled) bitmapAfterResize.recycle()
-            if (bitmapPreprocessed !== bitmapToProcess && !bitmapToProcess.isRecycled) bitmapToProcess.recycle()
-            if (bitmapCopyForListeners !== bitmapPreprocessed && !bitmapPreprocessed.isRecycled) bitmapPreprocessed.recycle()
-
-            if (bitmapCopyForListeners == null || bitmapCopyForListeners.isRecycled) {
-                isProcessingImage.compareAndSet(true, false)
-                recyclePotentialSaveBitmap("falha copiar OCR")
-                return
-            }
-
-            try {
-                ocr.processThrottled(bitmapCopyForListeners, 0, 350)
-                    .addOnSuccessListener listener@{ visionText ->
-                        val extractedText = visionText.text
-                        if (extractedText.isBlank()) return@listener
-
-                        // Palavra-chave “A recolher” → promover último semáforo mostrado (mantido)
-                        if (!inFlightPickupLatch && containsPickupKeyword(extractedText)) {
-                            val now = System.currentTimeMillis()
-                            if (now - lastStartPromptMs >= START_PROMPT_DEBOUNCE_MS) {
-                                lastStartPromptMs = now
-                                try {
-                                    val intent = Intent(this, OverlayService::class.java).apply {
-                                        action = OverlayService.ACTION_CONFIRM_START_TRACKING
-                                    }
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        startForegroundService(intent)
-                                    } else {
-                                        startService(intent)
-                                    }
-                                } catch (_: Exception) { }
-                            }
-                        }
-
-                        val offerData = imageAnalysisUtils.analyzeTextForOffer(
-                            visionText, bitmapCopyForListeners.width, bitmapCopyForListeners.height)
-                        if (offerData == null || !offerData.isValid()) return@listener
-
-                        // Bufferiza CANDIDATO (só em memória, não salva)
-                        try {
-                            lastCandidateSignature = createOfferSignature(offerData)
-                            lastCandidateTime = System.currentTimeMillis()
-                            try {
-                                lastCandidateBitmap = bitmapCopyForListeners.copy(
-                                    bitmapCopyForListeners.config ?: Bitmap.Config.ARGB_8888, false
-                                )
-                            } catch (_: Exception) { lastCandidateBitmap = null }
-                        } catch (_: Exception) { }
-
-                        val stable = stability.add(offerData) ?: return@listener
-
-                        when (classify(stable)) {
-                            Verdict.INVALID -> return@listener
-                            Verdict.SUSPECT -> {
-                                val sig = createOfferSignature(stable)
-                                val now = System.currentTimeMillis()
-                                val canRecapture = (sig != lastDetectedOfferSignature) || (now - lastOfferDetectedTime > 2000L)
-                                if (canRecapture) {
-                                    lastDetectedOfferSignature = sig
-                                    lastOfferDetectedTime = now
-                                    stability.clear()
-                                    processingHandler.postDelayed({
-                                        imageReader?.let { rdr -> processAvailableImage(rdr) }
-                                    }, 600L)
-                                }
-                                return@listener
-                            }
-                            Verdict.VALID -> {
-                                val offerSignature = createOfferSignature(stable)
-                                val since = System.currentTimeMillis() - lastOfferDetectedTime
-                                if (since < OFFER_PROCESSING_LOCK_PERIOD_MS && offerSignature == lastDetectedOfferSignature) {
-                                    return@listener
-                                }
-                                lastOfferDetectedTime = System.currentTimeMillis()
-                                lastDetectedOfferSignature = offerSignature
-
-                                // **Persistência de screenshots desativada**: limpa buffers e segue
-                                processingHandler.post {
-                                    recyclePotentialSaveBitmap("save off (hard)")
-                                    try { nextOfferBitmap?.recycle() } catch (_: Exception) {}
-                                    nextOfferBitmap = null; nextOfferSignature = null
-                                }
-
-                                Handler(Looper.getMainLooper()).post {
-                                    OfferManager.getInstance(applicationContext).processOffer(stable)
-                                }
-                            }
-                        }
-                    }
-                    .addOnFailureListener { processingHandler.post { recyclePotentialSaveBitmap("falha OCR") } }
-                    .addOnCompleteListener {
-                        if (bitmapCopyForListeners?.isRecycled == false) bitmapCopyForListeners.recycle()
-                        isProcessingImage.compareAndSet(true, false)
-                    }
-            } catch (_: IllegalStateException) {
-                if (bitmapCopyForListeners?.isRecycled == false) bitmapCopyForListeners.recycle()
-                processingHandler.post { recyclePotentialSaveBitmap("ocr throttled") }
-                isProcessingImage.compareAndSet(true, false)
-                return
-            }
-        } catch (_: OutOfMemoryError) {
-            bitmapCopyForListeners?.recycle(); bitmapPreprocessed?.recycle(); bitmapAfterResize?.recycle(); bitmapToProcess.recycle()
-            processingHandler.post { recyclePotentialSaveBitmap("OOM") }
-            isProcessingImage.compareAndSet(true, false)
-        } catch (_: Exception) {
-            bitmapCopyForListeners?.recycle(); bitmapPreprocessed?.recycle(); bitmapAfterResize?.recycle(); bitmapToProcess.recycle()
-            processingHandler.post { recyclePotentialSaveBitmap("exceção") }
-            isProcessingImage.compareAndSet(true, false)
-        }
     }
 
     private fun containsPickupKeyword(text: String): Boolean {
@@ -769,61 +702,34 @@ class ScreenCaptureService : Service() {
         val b = lastBitmapForPotentialSave
         if (b != null && !b.isRecycled) { b.recycle() }
         lastBitmapForPotentialSave = null
-        bufferedOfferSignature = null
     }
 
-    // Mantido (debug), mas não utilizado no fluxo atual de persistência
-    private fun saveScreenshotToGallery(bitmapToSave: Bitmap?, prefix: String) {
-        if (bitmapToSave == null || bitmapToSave.isRecycled) return
-        val timeStamp = SimpleDateFormat("yyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
-        val fileName = "SmartDriver_${prefix}_${timeStamp}_${screenshotCounter++}.jpg"
-
-        val cv = android.content.ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
-            put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/SmartDriverDebug")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
-        }
-
-        val imageUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
-        var success = false
-
-        if (imageUri != null) {
-            try {
-                contentResolver.openOutputStream(imageUri)?.use { os ->
-                    bitmapToSave.compress(Bitmap.CompressFormat.JPEG, 90, os)
-                    success = true
-                }
-            } catch (_: Exception) {
-                try { contentResolver.delete(imageUri, null, null) } catch (_: Exception) {}
-            }
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && imageUri != null && success) {
-            cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0)
-            try { contentResolver.update(imageUri, cv, null, null) } catch (_: Exception) {}
-        }
-        if (!bitmapToSave.isRecycled) bitmapToSave.recycle()
-    }
-
-    private fun createNotification(contentText: String): Notification {
+    private fun createNotification(contentText: String, clickable: Boolean): Notification {
         createNotificationChannel()
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("SmartDriver")
             .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_stat_smartdriver)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+
+        if (clickable) {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra("AUTO_REQUEST_PERMISSION", true)
+            }
+            val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            builder.setContentIntent(pi)
+            builder.addAction(R.drawable.ic_stat_smartdriver, "REATIVAR", pi)
+        }
+
+        return builder.build()
     }
 
-    private fun updateNotification(contentText: String) {
+    private fun updateNotification(contentText: String, clickable: Boolean) {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, createNotification(contentText))
+            .notify(NOTIFICATION_ID, createNotification(contentText, clickable))
     }
 
     private fun createNotificationChannel() {
@@ -846,8 +752,9 @@ class ScreenCaptureService : Service() {
         isRunning.set(false)
 
         userStopRequested = true
-        stopScreenCaptureInternal()
+        stopCaptureResources()
 
+        try { unregisterReceiver(screenUnlockReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(overlayEventsReceiver) } catch (_: Exception) {}
 
         if (::processingThread.isInitialized && processingThread.isAlive) {
