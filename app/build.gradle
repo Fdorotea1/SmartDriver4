@@ -86,6 +86,7 @@ dependencies {
     // Google Play Services (mantidos)
     implementation "com.google.android.gms:play-services-location:21.3.0"
     implementation "com.google.android.gms:play-services-maps:18.2.0"
+    implementation "com.google.maps.android:android-maps-utils:3.8.2"   // <-- ADICIONADO
 
     // AndroidX (compatíveis com compileSdk 33)
     implementation 'androidx.core:core-ktx:1.9.0'

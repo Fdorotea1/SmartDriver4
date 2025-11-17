@@ -1,0 +1,323 @@
+# SmartDriver — Índice de Projeto (gerado)
+Gerado em: 2025-11-11 21:20:28
+Raiz analisada: C:\Users\ferna\AndroidStudioProjects\SmartDriver4
+
+## Sumário
+- Ficheiros analisados: 134
+- Linhas (aprox.): 17038
+- Tamanho total: 709.8 KB
+- Diretórios ignorados: .DS_Store, .fleet, .git, .gradle, .history, .idea, build, captures, out
+- Extensões incluídas: .gradle, .java, .json, .kt, .kts, .md, .pro, .properties, .txt, .xml
+
+## Indicadores heurísticos
+- Provável-ativos: 105
+- Possível-inativos: 22 (antigos e pequenos)
+
+## Duplicados por nome de ficheiro
+- build.gradle:
+    • app/build.gradle  [107 linhas, 3.2 KB]
+    • build.gradle  [5 linhas, 214.0 B]
+- themes.xml:
+    • app/src/main/res/values-night/themes.xml  [16 linhas, 813.0 B]
+    • app/src/main/res/values-v31/themes.xml  [14 linhas, 703.0 B]
+    • app/src/main/res/values/themes.xml  [99 linhas, 5.0 KB]
+
+## Estrutura: código (java/kotlin)
+└── app
+    └── src
+        └── main
+            └── java
+                ├── com
+                │   └── example
+                │       └── smartdriver
+                │           ├── capture
+                │           │   └── · ScreenshotCropper.kt
+                │           ├── data
+                │           │   ├── · GoalStore.kt
+                │           │   └── · TelemetryStore.kt
+                │           ├── map
+                │           │   ├── · MapEditorActivity.kt
+                │           │   ├── · MapPreviewActivity.kt
+                │           │   ├── · MapStyle.kt
+                │           │   └── · RouteProvider.kt
+                │           ├── permissions
+                │           │   ├── steps
+                │           │   │   ├── · BasePermissionFragment.kt
+                │           │   │   ├── · StepAccessibilityPermissionFragment.kt
+                │           │   │   ├── · StepBatteryOptimizationFragment.kt
+                │           │   │   ├── · StepFinishFragment.kt
+                │           │   │   ├── · StepIntroFragment.kt
+                │           │   │   ├── · StepNotificationPermissionFragment.kt
+                │           │   │   ├── · StepOverlayPermissionFragment.kt
+                │           │   │   └── · StepPostNotificationsPermissionFragment.kt
+                │           │   ├── · OnboardingActivity.kt
+                │           │   ├── · OnboardingPrefs.kt
+                │           │   ├── · PermissionsCenterActivity.kt
+                │           │   └── · PermissionsHelper.kt
+                │           ├── ui
+                │           │   └── widgets
+                │           │       └── · DonutProgressView.kt
+                │           ├── zones
+                │           │   ├── · GeoUtils.kt
+                │           │   ├── · PolygonEditorOverlay.kt
+                │           │   ├── · ZoneGeoStore.kt
+                │           │   ├── · ZoneModels.kt
+                │           │   ├── · ZoneOverlayAttacher.kt
+                │           │   ├── · ZonePainter.kt
+                │           │   ├── · ZoneRepository.kt
+                │           │   ├── · ZoneRuntime.kt
+                │           │   ├── · ZonesRenderGMap.kt
+                │           │   └── · ZonesRenderOverlay.kt
+                │           ├── · HistoryActivity.kt
+                │           ├── · HistoryAdapter.kt
+                │           ├── · MainActivity.kt
+                │           ├── · MediaProjectionCompat.kt
+                │           ├── · MediaProjectionData.kt
+                │           ├── · OfferManager.kt
+                │           ├── · ScreenCaptureService.kt
+                │           ├── · SetShiftTargetActivity.kt
+                │           ├── · SettingsActivity.kt
+                │           ├── · SmartDriverAccessibilityService.kt
+                │           └── · SplashActivity.kt
+                ├── overlay
+                │   ├── widgets
+                │   │   └── · MiniMapOverlay.kt
+                │   ├── · BannerManager.kt
+                │   ├── · FloatingIconView.kt
+                │   ├── · MapAutoOpenOnLabel.kt
+                │   ├── · MapLongPressBinder.kt
+                │   ├── · MapsLinkHelper.kt
+                │   ├── · MenuView.kt
+                │   ├── · MiniMapController.kt
+                │   ├── · OfferQueueEvents.kt
+                │   ├── · OverlayIntents.kt
+                │   ├── · OverlayService.kt
+                │   ├── · OverlayView.kt
+                │   └── · TrackingOverlayView.kt
+                └── utils
+                    ├── · BoltOfferExtractor.kt
+                    ├── · BorderRating.kt
+                    ├── · EvaluationResult.kt
+                    ├── · ImageAnalysisUtils.kt
+                    ├── · IndividualRating.kt
+                    ├── · MediaRetention.kt
+                    ├── · OcrTextRecognizer.kt
+                    ├── · OfferData.kt
+                    ├── · OfferEvaluator.kt
+                    ├── · OfferQueue.kt
+                    ├── · OfferRating.kt
+                    ├── · PendingOfferStore.kt
+                    ├── · ShiftSession.kt
+                    ├── · TripHistoryEntry.kt
+                    ├── · TripMediaStorage.kt
+                    ├── · TripScreenshotIndex.kt
+                    └── · TripTracker.kt
+
+## Estrutura: recursos (res)
+└── app
+    └── src
+        └── main
+            └── res
+                ├── color
+                │   ├── · switch_thumb_selector.xml
+                │   └── · switch_track_selector.xml
+                ├── drawable
+                │   ├── · bg_banner_blue.xml
+                │   ├── · bg_banner_center.xml
+                │   ├── · bg_banner_green.xml
+                │   ├── · bg_banner_red.xml
+                │   ├── · bg_banner_yellow.xml
+                │   ├── · fab_background.xml
+                │   ├── · ic_delete_zone.xml
+                │   ├── · ic_history.xml
+                │   ├── · ic_home.xml
+                │   ├── · ic_notification_icon.xml
+                │   ├── · ic_settings_24.xml
+                │   ├── · ic_settings_fab.xml
+                │   ├── · ic_shutdown.xml
+                │   ├── · ic_stat_name.xml
+                │   ├── · ic_stat_smartdriver.xml
+                │   ├── · ic_stat_tracking.xml
+                │   ├── · menu_background_shape.xml
+                │   └── · splash_transparent_icon.xml
+                ├── layout
+                │   ├── · activity_history.xml
+                │   ├── · activity_main.xml
+                │   ├── · activity_map_editor.xml
+                │   ├── · activity_map_preview.xml
+                │   ├── · activity_onboarding.xml
+                │   ├── · activity_permissions_center.xml
+                │   ├── · activity_settings.xml
+                │   ├── · activity_splash.xml
+                │   ├── · banner_center_queued_offer.xml
+                │   ├── · dialog_set_target.xml
+                │   ├── · fragment_permission_step.xml
+                │   ├── · item_permission_row.xml
+                │   ├── · item_zone.xml
+                │   ├── · list_item_history.xml
+                │   └── · quick_menu_layout.xml
+                ├── menu
+                │   ├── · main_menu.xml
+                │   └── · menu_map_editor.xml
+                ├── mipmap-anydpi-v26
+                │   ├── · ic_launcher.xml
+                │   └── · ic_launcher_round.xml
+                ├── raw
+                │   └── · sd_light_style.json
+                ├── values
+                │   ├── · colors.xml
+                │   ├── · ic_launcher_background.xml
+                │   ├── · strings.xml
+                │   ├── · styles-map.xml
+                │   └── · themes.xml
+                ├── values-night
+                │   └── · themes.xml
+                ├── values-v31
+                │   └── · themes.xml
+                └── xml
+                    ├── · accessibility_service_config.xml
+                    ├── · backup_rules.xml
+                    └── · data_extraction_rules.xml
+
+## Tabela detalhada (top 300 por ordem alfabética)
+linhas | tamanho | mtime-dias | ativo? | poss-inativo? | caminho
+-----------------------------------------------------------------
+   559 | 43.2 KB |          0 |  não  |         não  | AI_CONTEXT/project_index.txt
+   107 |  3.2 KB |         36 |   sim |         não  | app/build.gradle
+    27 |  1.2 KB |         93 |   sim |         não  | app/proguard-rules.pro
+    37 | 711.0 B |         87 |   sim |         não  | app/release/output-metadata.json
+    24 | 673.0 B |        212 |   sim |         não  | app/src/androidTest/java/com/example/smartdriver/ExampleInstrumentedTest.kt
+   139 |  5.9 KB |          0 |   sim |         não  | app/src/main/AndroidManifest.xml
+   482 | 21.7 KB |         35 |   sim |         não  | app/src/main/java/com/example/smartdriver/HistoryActivity.kt
+   278 | 11.8 KB |         35 |   sim |         não  | app/src/main/java/com/example/smartdriver/HistoryAdapter.kt
+   422 | 17.6 KB |         29 |   sim |         não  | app/src/main/java/com/example/smartdriver/MainActivity.kt
+     6 | 213.0 B |         54 |   sim |         não  | app/src/main/java/com/example/smartdriver/MediaProjectionCompat.kt
+    58 |  2.0 KB |         54 |   sim |         não  | app/src/main/java/com/example/smartdriver/MediaProjectionData.kt
+   201 |  9.0 KB |         41 |   sim |         não  | app/src/main/java/com/example/smartdriver/OfferManager.kt
+   858 | 40.1 KB |         29 |   sim |         não  | app/src/main/java/com/example/smartdriver/ScreenCaptureService.kt
+    78 |  3.4 KB |         32 |   sim |         não  | app/src/main/java/com/example/smartdriver/SetShiftTargetActivity.kt
+   257 | 11.1 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/SettingsActivity.kt
+   423 | 17.0 KB |         49 |   sim |         não  | app/src/main/java/com/example/smartdriver/SmartDriverAccessibilityService.kt
+   129 |  4.8 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/SplashActivity.kt
+   276 | 11.4 KB |         49 |   sim |         não  | app/src/main/java/com/example/smartdriver/capture/ScreenshotCropper.kt
+    53 |  1.7 KB |         86 |   sim |         não  | app/src/main/java/com/example/smartdriver/data/GoalStore.kt
+    26 | 958.0 B |         71 |   sim |         não  | app/src/main/java/com/example/smartdriver/data/TelemetryStore.kt
+   497 | 21.0 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/map/MapEditorActivity.kt
+  1098 | 41.8 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/map/MapPreviewActivity.kt
+    73 |  2.6 KB |         40 |   sim |         não  | app/src/main/java/com/example/smartdriver/map/MapStyle.kt
+    92 |  3.3 KB |         44 |   sim |         não  | app/src/main/java/com/example/smartdriver/map/RouteProvider.kt
+    88 |  2.8 KB |         27 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/OnboardingActivity.kt
+    18 | 599.0 B |         29 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/OnboardingPrefs.kt
+    59 |  2.5 KB |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/PermissionsCenterActivity.kt
+    96 |  3.5 KB |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/PermissionsHelper.kt
+    58 |  2.0 KB |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/BasePermissionFragment.kt
+    12 | 640.0 B |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepAccessibilityPermissionFragment.kt
+    12 | 636.0 B |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepBatteryOptimizationFragment.kt
+    23 | 1023.0 B |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepFinishFragment.kt
+    23 |  1.0 KB |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepIntroFragment.kt
+    12 | 630.0 B |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepNotificationPermissionFragment.kt
+    11 | 593.0 B |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepOverlayPermissionFragment.kt
+    68 |  2.7 KB |         33 |   sim |         não  | app/src/main/java/com/example/smartdriver/permissions/steps/StepPostNotificationsPermissionFragment.kt
+   224 |  7.3 KB |         32 |   sim |         não  | app/src/main/java/com/example/smartdriver/ui/widgets/DonutProgressView.kt
+    25 | 766.0 B |         40 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/GeoUtils.kt
+   278 |  9.7 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/PolygonEditorOverlay.kt
+   161 |  6.0 KB |         37 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZoneGeoStore.kt
+    55 |  1.6 KB |         40 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZoneModels.kt
+    27 | 833.0 B |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZoneOverlayAttacher.kt
+    38 |  1.3 KB |         40 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZonePainter.kt
+   134 |  3.7 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZoneRepository.kt
+    51 |  1.5 KB |         40 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZoneRuntime.kt
+    66 |  2.4 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZonesRenderGMap.kt
+    67 |  2.4 KB |          0 |   sim |         não  | app/src/main/java/com/example/smartdriver/zones/ZonesRenderOverlay.kt
+   144 |  4.7 KB |         89 |   sim |         não  | app/src/main/java/overlay/BannerManager.kt
+   229 |  8.2 KB |         57 |   sim |         não  | app/src/main/java/overlay/FloatingIconView.kt
+    69 |  2.1 KB |         38 |   sim |         não  | app/src/main/java/overlay/MapAutoOpenOnLabel.kt
+    48 |  1.7 KB |         38 |   sim |         não  | app/src/main/java/overlay/MapLongPressBinder.kt
+    72 |  2.6 KB |         35 |   sim |         não  | app/src/main/java/overlay/MapsLinkHelper.kt
+   227 |  9.1 KB |         57 |   sim |         não  | app/src/main/java/overlay/MenuView.kt
+    93 |  3.1 KB |         38 |   sim |         não  | app/src/main/java/overlay/MiniMapController.kt
+    16 | 531.0 B |         89 |   sim |         não  | app/src/main/java/overlay/OfferQueueEvents.kt
+    48 |  1.9 KB |          0 |   sim |         não  | app/src/main/java/overlay/OverlayIntents.kt
+  2492 | 102.8 KB |          0 |   sim |         não  | app/src/main/java/overlay/OverlayService.kt
+   845 | 36.7 KB |          0 |   sim |         não  | app/src/main/java/overlay/OverlayView.kt
+   736 | 28.2 KB |         38 |   sim |         não  | app/src/main/java/overlay/TrackingOverlayView.kt
+   200 |  6.9 KB |          0 |   sim |         não  | app/src/main/java/overlay/widgets/MiniMapOverlay.kt
+    78 |  2.9 KB |         29 |   sim |         não  | app/src/main/java/utils/BoltOfferExtractor.kt
+    11 | 375.0 B |        209 |   sim |          sim | app/src/main/java/utils/BorderRating.kt
+    19 | 785.0 B |        209 |   sim |          sim | app/src/main/java/utils/EvaluationResult.kt
+   688 | 30.8 KB |         27 |   sim |         não  | app/src/main/java/utils/ImageAnalysisUtils.kt
+    11 | 291.0 B |        209 |   sim |          sim | app/src/main/java/utils/IndividualRating.kt
+    83 |  3.2 KB |         52 |   sim |         não  | app/src/main/java/utils/MediaRetention.kt
+   105 |  4.2 KB |         93 |   sim |         não  | app/src/main/java/utils/OcrTextRecognizer.kt
+   124 |  4.8 KB |         46 |   sim |         não  | app/src/main/java/utils/OfferData.kt
+   101 |  4.1 KB |         71 |   sim |         não  | app/src/main/java/utils/OfferEvaluator.kt
+    87 |  3.0 KB |         46 |   sim |         não  | app/src/main/java/utils/OfferQueue.kt
+    12 | 305.0 B |        212 |   sim |          sim | app/src/main/java/utils/OfferRating.kt
+    91 |  3.4 KB |         52 |   sim |         não  | app/src/main/java/utils/PendingOfferStore.kt
+   233 |  8.7 KB |         93 |   sim |         não  | app/src/main/java/utils/ShiftSession.kt
+    50 |  1.9 KB |         35 |   sim |         não  | app/src/main/java/utils/TripHistoryEntry.kt
+    48 |  1.7 KB |         57 |   sim |         não  | app/src/main/java/utils/TripMediaStorage.kt
+    82 |  2.9 KB |         57 |   sim |         não  | app/src/main/java/utils/TripScreenshotIndex.kt
+   197 |  7.4 KB |         35 |   sim |         não  | app/src/main/java/utils/TripTracker.kt
+    16 | 710.0 B |         69 |  não  |         não  | app/src/main/res/color/switch_thumb_selector.xml
+     8 | 302.0 B |         69 |  não  |         não  | app/src/main/res/color/switch_track_selector.xml
+     4 | 180.0 B |         90 |  não  |         não  | app/src/main/res/drawable/bg_banner_blue.xml
+     5 | 324.0 B |         89 |  não  |         não  | app/src/main/res/drawable/bg_banner_center.xml
+     4 | 180.0 B |         90 |  não  |         não  | app/src/main/res/drawable/bg_banner_green.xml
+     4 | 180.0 B |         90 |  não  |         não  | app/src/main/res/drawable/bg_banner_red.xml
+     4 | 180.0 B |         90 |  não  |         não  | app/src/main/res/drawable/bg_banner_yellow.xml
+    14 | 672.0 B |        204 |  não  |          sim | app/src/main/res/drawable/fab_background.xml
+     5 | 390.0 B |        180 |  não  |         não  | app/src/main/res/drawable/ic_delete_zone.xml
+     5 | 552.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_history.xml
+     5 | 324.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_home.xml
+    74 |  4.8 KB |        208 |  não  |         não  | app/src/main/res/drawable/ic_notification_icon.xml
+     9 |  1.2 KB |         69 |  não  |         não  | app/src/main/res/drawable/ic_settings_24.xml
+     5 | 943.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_settings_fab.xml
+     5 | 390.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_shutdown.xml
+     5 | 677.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_stat_name.xml
+    10 | 723.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_stat_smartdriver.xml
+    10 | 529.0 B |        204 |  não  |          sim | app/src/main/res/drawable/ic_stat_tracking.xml
+     7 | 381.0 B |        204 |  não  |          sim | app/src/main/res/drawable/menu_background_shape.xml
+     4 | 202.0 B |         35 |  não  |         não  | app/src/main/res/drawable/splash_transparent_icon.xml
+    38 |  1.6 KB |        204 |   sim |         não  | app/src/main/res/layout/activity_history.xml
+    78 |  3.1 KB |         33 |   sim |         não  | app/src/main/res/layout/activity_main.xml
+    22 | 827.0 B |         42 |   sim |         não  | app/src/main/res/layout/activity_map_editor.xml
+    12 | 436.0 B |          0 |  não  |         não  | app/src/main/res/layout/activity_map_preview.xml
+    45 |  1.4 KB |         33 |   sim |         não  | app/src/main/res/layout/activity_onboarding.xml
+    21 | 730.0 B |         33 |   sim |         não  | app/src/main/res/layout/activity_permissions_center.xml
+   289 | 12.2 KB |         42 |   sim |         não  | app/src/main/res/layout/activity_settings.xml
+    44 |  1.8 KB |         35 |   sim |         não  | app/src/main/res/layout/activity_splash.xml
+    30 |  1.1 KB |         89 |   sim |         não  | app/src/main/res/layout/banner_center_queued_offer.xml
+    15 | 641.0 B |        181 |   sim |          sim | app/src/main/res/layout/dialog_set_target.xml
+    50 |  1.8 KB |         33 |   sim |         não  | app/src/main/res/layout/fragment_permission_step.xml
+    27 | 873.0 B |         33 |   sim |         não  | app/src/main/res/layout/item_permission_row.xml
+    68 |  2.3 KB |         42 |   sim |         não  | app/src/main/res/layout/item_zone.xml
+   143 |  6.5 KB |         35 |   sim |         não  | app/src/main/res/layout/list_item_history.xml
+   436 | 16.5 KB |         54 |   sim |         não  | app/src/main/res/layout/quick_menu_layout.xml
+    12 | 458.0 B |         29 |  não  |         não  | app/src/main/res/menu/main_menu.xml
+    19 | 611.0 B |         42 |  não  |         não  | app/src/main/res/menu/menu_map_editor.xml
+     5 | 269.0 B |        204 |  não  |          sim | app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+     5 | 269.0 B |        204 |  não  |          sim | app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+    11 | 910.0 B |          0 |   sim |         não  | app/src/main/res/raw/sd_light_style.json
+    16 | 813.0 B |         78 |   sim |         não  | app/src/main/res/values-night/themes.xml
+    14 | 703.0 B |         35 |   sim |         não  | app/src/main/res/values-v31/themes.xml
+    50 |  1.9 KB |         54 |   sim |         não  | app/src/main/res/values/colors.xml
+     4 | 123.0 B |        204 |   sim |          sim | app/src/main/res/values/ic_launcher_background.xml
+   107 |  6.8 KB |         42 |   sim |         não  | app/src/main/res/values/strings.xml
+    13 | 639.0 B |         41 |   sim |         não  | app/src/main/res/values/styles-map.xml
+    99 |  5.0 KB |         35 |   sim |         não  | app/src/main/res/values/themes.xml
+    12 | 750.0 B |        212 |  não  |          sim | app/src/main/res/xml/accessibility_service_config.xml
+     6 | 292.0 B |         29 |  não  |         não  | app/src/main/res/xml/backup_rules.xml
+    11 | 431.0 B |         29 |  não  |         não  | app/src/main/res/xml/data_extraction_rules.xml
+    17 | 347.0 B |        212 |   sim |          sim | app/src/test/java/com/example/smartdriver/ExampleUnitTest.kt
+     5 | 214.0 B |        212 |   sim |          sim | build.gradle
+    23 |  1.3 KB |        212 |   sim |         não  | gradle.properties
+     6 | 237.0 B |        212 |   sim |          sim | gradle/wrapper/gradle-wrapper.properties
+     4 | 121.0 B |         87 |   sim |         não  | keystore.properties
+    10 | 449.0 B |        212 |   sim |          sim | local.properties
+    23 | 534.0 B |         93 |   sim |         não  | settings.gradle
+
+## Notas
+- 'provável-ativo' baseia-se em tokens típicos (class/fun/layout/manifest etc.).
+- 'possível-inativo' = ficheiro muito antigo e com poucas linhas (heurística).
+- Se precisares, podemos gerar uma lista negra/whitelist para afinar as heurísticas.

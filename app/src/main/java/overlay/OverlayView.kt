@@ -1,12 +1,11 @@
-// (arquivo completo - OverlayView.kt)
 package com.example.smartdriver.overlay
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
-import android.content.ClipData
-import android.content.ClipboardManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.*
 import android.os.Build
 import android.text.TextPaint
@@ -16,10 +15,14 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import com.example.smartdriver.map.MapPreviewActivity
 import com.example.smartdriver.utils.BorderRating
 import com.example.smartdriver.utils.EvaluationResult
 import com.example.smartdriver.utils.IndividualRating
 import com.example.smartdriver.utils.OfferData
+import com.example.smartdriver.utils.toDoubleOrNullWithCorrection
+import com.example.smartdriver.utils.toIntOrNullWithCorrection
+import java.lang.StringBuilder
 import java.math.RoundingMode
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -27,79 +30,118 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import java.lang.StringBuilder
-import com.example.smartdriver.map.MapPreviewActivity
 
 @SuppressLint("ClickableViewAccessibility")
 class OverlayView(context: Context) : View(context) {
 
-    // ======================= Zonas (estado vindo do mapa) =======================
     enum class ZoneState { UNKNOWN, NEUTRAL, PREFERRED, NO_GO }
+
+    /**
+     * Mantido por compatibilidade com o serviço (mesmo sem desenhar moradas).
+     */
+    enum class ZoneHighlightTarget { NONE, PICKUP, DEST, BOTH }
+
     private var currentZoneState: ZoneState = readLastZoneFromPrefs() ?: ZoneState.UNKNOWN
-    fun updateZoneState(state: ZoneState) { currentZoneState = state; invalidate() }
+    private var zoneHighlightTarget: ZoneHighlightTarget = ZoneHighlightTarget.NONE
+
+    fun updateZoneState(state: ZoneState) {
+        if (state != currentZoneState) {
+            currentZoneState = state
+            saveLastZoneToPrefs(state)
+            invalidate()
+        }
+    }
+
+    fun setZoneHighlightTarget(target: ZoneHighlightTarget) {
+        zoneHighlightTarget = target
+        invalidate()
+    }
+
+    fun setAddressZoneKinds(pickupKind: String, destKind: String) {
+        val pkNoGo = pickupKind.equals("NO_GO", ignoreCase = true)
+        val dtNoGo = destKind.equals("NO_GO", ignoreCase = true)
+
+        zoneHighlightTarget = when {
+            pkNoGo && dtNoGo -> ZoneHighlightTarget.BOTH
+            pkNoGo           -> ZoneHighlightTarget.PICKUP
+            dtNoGo           -> ZoneHighlightTarget.DEST
+            else             -> ZoneHighlightTarget.NONE
+        }
+        invalidate()
+    }
+
+    // Override opcional da cor de preenchimento do card (interior).
+    private var zoneFillOverride: Int? = null
+
+    fun setZoneFillColor(color: Int?) {
+        zoneFillOverride = color
+        invalidate()
+    }
+
+    fun setZoneVisualFromKind(kind: String?) {
+        val ns = when (kind?.trim()?.uppercase(Locale.getDefault())) {
+            "NO_GO"     -> ZoneState.NO_GO
+            "PREFERRED" -> ZoneState.PREFERRED
+            "NEUTRAL"   -> ZoneState.NEUTRAL
+            "UNKNOWN", null -> ZoneState.UNKNOWN
+            else -> ZoneState.UNKNOWN
+        }
+        updateZoneState(ns)
+    }
 
     companion object {
         private const val TAG = "OverlayView"
 
-        // Broadcast para receber dicas de zona (opcional)
+        // Broadcast para dicas/alterações de zona
         const val ACTION_ZONE_HINT = "com.example.smartdriver.overlay.ACTION_ZONE_HINT"
-        const val EXTRA_ZONE_KIND  = "zone_kind" // "NO_GO" | "PREFERRED" | "NEUTRAL" | "UNKNOWN"
+        const val EXTRA_ZONE_KIND  = "zone_kind"
 
-        // Cores base
+        // Cores rebordo
         private val BORDER_COLOR_GREEN = Color.parseColor("#2E7D32")
         private val BORDER_COLOR_YELLOW = Color.parseColor("#F9A825")
         private val BORDER_COLOR_RED   = Color.parseColor("#C62828")
         private val BORDER_COLOR_GRAY  = Color.parseColor("#9E9E9E")
 
-        private val INDICATOR_COLOR_GOOD    = BORDER_COLOR_GREEN
-        private val INDICATOR_COLOR_MEDIUM  = BORDER_COLOR_YELLOW
-        private val INDICATOR_COLOR_POOR    = BORDER_COLOR_RED
-        private val INDICATOR_COLOR_UNKNOWN = Color.DKGRAY
+        // Indicadores (€/hora / €/km)
+        private val INDICATOR_COLOR_GOOD    = Color.parseColor("#4CAF50")
+        private val INDICATOR_COLOR_MEDIUM  = Color.parseColor("#FFC107")
+        private val INDICATOR_COLOR_POOR    = Color.parseColor("#F44336")
+        private val INDICATOR_COLOR_UNKNOWN = Color.parseColor("#757575")
 
-        private val BACKGROUND_COLOR       = Color.WHITE
-        private val TEXT_COLOR_LABEL       = Color.DKGRAY
-        private val TEXT_COLOR_VALUE       = Color.BLACK
-        private val PLACEHOLDER_TEXT_COLOR = Color.LTGRAY
+        // Fundo da view é transparente
+        private val BACKGROUND_COLOR       = Color.TRANSPARENT
+        private val TEXT_COLOR_LABEL       = Color.parseColor("#BDBDBD")
+        private val TEXT_COLOR_VALUE       = Color.WHITE
+        private val PLACEHOLDER_TEXT_COLOR = Color.parseColor("#757575")
 
-        // Zonas (fundo do verso e miolo do círculo)
-        private val ZONE_NEUTRAL_FILL   = Color.parseColor("#FAFAFA")
-        private val ZONE_PREFERRED_FILL = Color.parseColor("#C8E6C9")
-        private val ZONE_NO_GO_FILL     = Color.parseColor("#FFCDD2")
+        // Fill do card → preto (como o card do mapa)
+        private val CARD_FILL_SOFT_BLUE    = Color.BLACK
+        private val ZONE_NEUTRAL_FILL      = CARD_FILL_SOFT_BLUE
+        private val ZONE_UNKNOWN_FILL      = CARD_FILL_SOFT_BLUE
+        private val ZONE_PREFERRED_FILL    = CARD_FILL_SOFT_BLUE
+        private val ZONE_NO_GO_FILL        = CARD_FILL_SOFT_BLUE
 
-        // Miolo do semáforo — BRANCO (pedido)
-        private val INNER_FILL_COLOR    = Color.parseColor("#FFFFFF")
-
-        // Dimensões (DP/SP)
+        // Dimensões base (em dp/sp)
         private const val PADDING_DP = 12f
-        private const val BORDER_WIDTH_DP = 8f
-        private const val CORNER_RADIUS_DP = 12f
+        private const val CORNER_RADIUS_DP = 18f
         private const val TEXT_SPACING_VERTICAL_DP = 3f
         private const val LINE_SPACING_VERTICAL_DP = 6f
         private const val TEXT_SPACING_HORIZONTAL_DP = 15f
-        private const val INDICATOR_BAR_WIDTH_DP = 4f
-        private const val INDICATOR_BAR_MARGIN_DP = 6f
 
-        // Círculo (semáforo)
-        private const val OUTER_STROKE_DP = 14f
-        private const val INNER_PADDING_DP = 8f
-        private const val PROHIBIT_SIZE_DP = 22f
-        private const val PROHIBIT_STROKE_DP = 3f
-        private const val MIN_CIRCLE_DIAMETER_DP = 136f
-
-        // Tamanhos de texto
         private const val LABEL_TEXT_SIZE_SP = 11f
         private const val VALUE_TEXT_SIZE_SP = 13f
         private const val HIGHLIGHT_VALUE_TEXT_SIZE_SP = 14f
         private const val EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP = 15f
 
-        private const val HOUR_TEXT_SP = 22f        // €/h central
-        private const val OFFER_TEXT_SP = 12.5f     // valor da oferta (acima do €/h)
-        private const val PLATFORM_TEXT_SP = 12.5f  // plataforma (abaixo do €/h)
-        private const val KM_TEXT_SP = 12.5f        // €/km no rodapé (aumentado)
+        // Cabeçalho
+        private const val HEADER_TITLE_SP = 12.5f
+        // Fonte do €/hora mais pequena para não bater nos valores de cima
+        private const val HEADER_EURH_SP  = 18f
+        private const val HEADER_EURKM_SP = 12.5f
 
         private const val PLACEHOLDER_TEXT = "--"
 
-        // Gestos (swipe)
+        // Gestos
         private const val SWIPE_MIN_DISTANCE_DP = 80f
         private const val SWIPE_THRESHOLD_VELOCITY_DP = 100f
 
@@ -108,33 +150,54 @@ class OverlayView(context: Context) : View(context) {
         private const val BANNER_PAD_H_DP = 10f
         private const val BANNER_PAD_V_DP = 6f
         private const val BANNER_CORNER_DP = 10f
+
+        // Card metrics
+        private const val CARD_OUTER_MARGIN_DP = 12f
+        private const val CARD_PAD_DP = 16f
+        private const val SEPARATOR_HEIGHT_DP = 1f
+        private const val BADGE_NOGO_DP = 18f
+
+        // Rebordos
+        private const val INNER_STROKE_DP = 1f
+        private const val COLORED_BORDER_WIDTH_DP = 4f
+
+        // Zona / ícone (reduzido para ficar mais discreto)
+        private const val ZONE_ICON_SIZE_SP = 20f
+        private const val ZONE_DOT_RADIUS_DP = 4f
     }
 
     enum class BannerType { INFO, SUCCESS, WARNING }
 
-    // ======================= Estado do componente =======================
+    // Estado
     private var currentEvaluationResult: EvaluationResult? = null
     private var currentOfferData: OfferData? = null
-    private var fontSizeScale = 1.0f
+
+    // alpha atual do semáforo (controlado pelo slider / settings)
     private var viewAlpha = 0.95f
-    private var showBack = false
 
-    // Sincronização com mapa
-    private var mapShownOnce = false
-    private var defaultAutoHideMs = 10_000L
-    private var defaultFadeMs = 400L
-    private var lastAlphaSent = -1f
-
-    // Banner
+    // Banner genérico
     private var bannerText: String? = null
     private var bannerType: BannerType = BannerType.INFO
     private var bannerClearAt: Long = 0L
 
-    // ======================= Paints =======================
-    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BACKGROUND_COLOR }
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = BORDER_COLOR_GRAY }
+    // Paints
+    private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = BACKGROUND_COLOR
+    }
 
-    // Texto geral
+    private val innerStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.parseColor("#22000000")
+        strokeWidth = 0f
+    }
+    private val coloredBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = BORDER_COLOR_GRAY
+        strokeWidth = 0f
+    }
+
+    // Texto
     private val labelTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = TEXT_COLOR_LABEL
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -142,6 +205,11 @@ class OverlayView(context: Context) : View(context) {
     }
     private val valueTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = TEXT_COLOR_VALUE
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        flags = flags or Paint.SUBPIXEL_TEXT_FLAG
+    }
+    private val addressHighlightPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFEB3B")
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         flags = flags or Paint.SUBPIXEL_TEXT_FLAG
     }
@@ -169,36 +237,50 @@ class OverlayView(context: Context) : View(context) {
         flags = flags or Paint.SUBPIXEL_TEXT_FLAG
     }
 
-    // Semáforo redondo
-    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
-    private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val hourTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+    // Cabeçalho
+    private val headerOfferPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = TEXT_COLOR_VALUE
+        textAlign = Paint.Align.LEFT
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        flags = flags or Paint.SUBPIXEL_TEXT_FLAG
+    }
+    private val headerHourPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = TEXT_COLOR_VALUE
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         flags = flags or Paint.SUBPIXEL_TEXT_FLAG
     }
-    private val offerTinyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = TEXT_COLOR_VALUE // ajustado por uso
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        flags = flags or Paint.SUBPIXEL_TEXT_FLAG
-    }
-    private val kmTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val headerKmPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = TEXT_COLOR_VALUE
-        textAlign = Paint.Align.CENTER
+        textAlign = Paint.Align.RIGHT
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         flags = flags or Paint.SUBPIXEL_TEXT_FLAG
     }
-    private val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BORDER_COLOR_RED }
-    private val prohibitRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = BORDER_COLOR_RED }
-    private val prohibitBarPaint  = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.WHITE }
 
-    // Quadro do verso
-    private val backCardFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val backCardStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    // Zona / ícone grande
+    private val zoneIconPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = TEXT_COLOR_VALUE
+        textAlign = Paint.Align.LEFT
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        flags = flags or Paint.SUBPIXEL_TEXT_FLAG
+    }
 
-    // ======================= Dimensões calculadas (PX) =======================
+    // Bolinhas (compatibilidade)
+    private val pickupDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#2E7D32")
+    }
+    private val destDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#C62828")
+    }
+
+    private val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = BORDER_COLOR_RED
+    }
+
+    // Métricas
     private var paddingPx = 0f
     private var borderRadiusPx = 0f
     private var textSpacingVerticalPx = 0f
@@ -208,39 +290,53 @@ class OverlayView(context: Context) : View(context) {
     private var valueHeight = 0f
     private var highlightValueHeight = 0f
     private var extraHighlightValueHeight = 0f
-    private var indicatorBarWidthPx = 0f
-    private var indicatorBarMarginPx = 0f
     private var swipeMinDistancePx = 0f
     private var swipeThresholdVelocityPx = 0f
     private var bannerPadHPx = 0f
     private var bannerPadVPx = 0f
     private var bannerCornerPx = 0f
 
-    // Círculo
-    private var outerStrokePx = 0f
-    private var innerPaddingPx = 0f
-    private var prohibitSizePx = 0f
-    private var prohibitStrokePx = 0f
+    private var cardOuterMarginPx = 0f
+    private var cardPadPx = 0f
+    private var separatorHeightPx = 0f
+    private var badgeNoGoPx = 0f
+    private var zoneDotRadiusPx = 0f
 
-    // Verso (quadro)
-    private var backCardCornerPx = 0f
-    private var backCardPadPx = 0f
-
-    // Gap extra entre linhas do verso
-    private var lineGapPx = 0f
-
-    // ======================= Formatação PT-PT =======================
+    // Formatação
     private val euroSymbols = DecimalFormatSymbols(Locale("pt", "PT"))
     private val euroHoraFormatter = DecimalFormat("0.0", euroSymbols).apply { roundingMode = RoundingMode.HALF_UP }
     private val euroOfferFormatter = DecimalFormat("0.00", euroSymbols).apply { roundingMode = RoundingMode.HALF_UP }
 
-    // ======================= Retângulos auxiliares =======================
+    // Rects
     private val backgroundRect = RectF()
-    private val borderRect = RectF()
     private val bannerRect = RectF()
+    private val cardRect = RectF()
+    private val contentRect = RectF()
 
-    // ======================= Gestos =======================
+    // Gestos
     private val gestureDetector: GestureDetector
+
+    // Receiver zona
+    private var zoneReceiver: BroadcastReceiver? = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_ZONE_HINT) return
+            val raw = intent.getStringExtra(EXTRA_ZONE_KIND)?.trim()?.uppercase(Locale.getDefault())
+            val newState = when (raw) {
+                "NO_GO"     -> ZoneState.NO_GO
+                "PREFERRED" -> ZoneState.PREFERRED
+                "NEUTRAL"   -> ZoneState.NEUTRAL
+                "UNKNOWN", null -> ZoneState.UNKNOWN
+                else -> {
+                    Log.w(TAG, "Zona desconhecida no broadcast: $raw")
+                    return
+                }
+            }
+            updateZoneState(newState)
+        }
+    }
+
+    // Escala de fonte (slider)
+    private var fontSizeScale = 1.0f
 
     init {
         alpha = viewAlpha
@@ -250,44 +346,48 @@ class OverlayView(context: Context) : View(context) {
             override fun onDown(e: MotionEvent): Boolean = true
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                showBack = !showBack
+                // Semáforo mantém estado; clique simples apenas força redraw
                 requestLayout()
                 invalidate()
                 return true
             }
 
             override fun onLongPress(e: MotionEvent) {
-                openOrUpdateMapForCurrentOffer(show = true, forceShowMs = 12_000L)
+                // Long press: abre mapa fullscreen com o mesmo card
+                openOrUpdateMapForCurrentOffer(show = true, forceShowMs = 0L)
             }
 
-            override fun onFling(e1: MotionEvent, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                val diffY = e2.y - e1.y
-                val diffX = e2.x - e1.x
+            override fun onFling(e1: MotionEvent, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                val dx = e2.x - e1.x
+                val dy = e2.y - e1.y
 
-                if (abs(diffY) > abs(diffX)) {
-                    if (abs(diffY) > swipeMinDistancePx && abs(velocityY) > swipeThresholdVelocityPx) {
-                        val action = if (diffY < 0)
+                if (abs(dy) > abs(dx)) {
+                    if (abs(dy) > swipeMinDistancePx && abs(vy) > swipeThresholdVelocityPx) {
+                        val action = if (dy < 0)
                             OverlayService.ACTION_SHOW_PREV_OVERLAY
                         else
                             OverlayService.ACTION_SHOW_NEXT_OVERLAY
+
                         try {
                             context.startService(Intent(context, OverlayService::class.java).apply { this.action = action })
                         } catch (ex: Exception) {
-                            Log.e(TAG, "Erro ao enviar ação de navegação: ${ex.message}")
+                            Log.e(TAG, "Erro navegação: ${ex.message}")
                         }
                         return true
                     }
                 } else {
-                    if (abs(diffX) > swipeMinDistancePx && abs(velocityX) > swipeThresholdVelocityPx) {
-                        if (diffX > 0) {
+                    if (abs(dx) > swipeMinDistancePx && abs(vx) > swipeThresholdVelocityPx) {
+                        if (dx > 0) {
                             showStartConfirmDialog()
                             return true
                         } else {
-                            val confirmDismiss = Intent(context, OverlayService::class.java).apply {
+                            val i = Intent(context, OverlayService::class.java).apply {
                                 action = OverlayService.ACTION_CONFIRM_DISMISS_MAIN_OVERLAY
                             }
-                            try { context.startService(confirmDismiss) } catch (ex: Exception) {
-                                Log.e(TAG, "Erro ao enviar CONFIRM_DISMISS_MAIN_OVERLAY (swipe): ${ex.message}")
+                            try {
+                                context.startService(i)
+                            } catch (ex: Exception) {
+                                Log.e(TAG, "Erro CONFIRM_DISMISS: ${ex.message}")
                             }
                             return true
                         }
@@ -296,15 +396,40 @@ class OverlayView(context: Context) : View(context) {
                 return false
             }
         })
-        contentDescription = "SmartDriver Overlay"
+
+        contentDescription = "SmartDriver card de oferta"
         isFocusable = false
         isFocusableInTouchMode = false
     }
 
-    // ======================= Eventos de toque =======================
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        try {
+            val f = IntentFilter(ACTION_ZONE_HINT)
+            context.registerReceiver(zoneReceiver, f)
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha a registar zoneReceiver: ${e.message}")
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        try { context.unregisterReceiver(zoneReceiver) } catch (_: Exception) {}
+
+        // Esconde o mapa se o semáforo sair da janela (por segurança)
+        runCatching {
+            val hide = Intent(MapPreviewActivity.ACTION_SEMAFORO_HIDE_MAP).apply {
+                setPackage(context.packageName)
+            }
+            context.sendBroadcast(hide)
+        }
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val consumed = gestureDetector.onTouchEvent(event)
-        if (bannerText != null && bannerClearAt > 0 && System.currentTimeMillis() >= bannerClearAt) {
+
+        val now = System.currentTimeMillis()
+        if (bannerText != null && bannerClearAt > 0 && now >= bannerClearAt) {
             bannerText = null
             bannerClearAt = 0
             invalidate()
@@ -312,69 +437,111 @@ class OverlayView(context: Context) : View(context) {
         return consumed || super.onTouchEvent(event)
     }
 
-    // ======================= Integração com o mapa =======================
+    // =================== MAPA ===================
     private fun openOrUpdateMapForCurrentOffer(show: Boolean, forceShowMs: Long? = null) {
-        val od = currentOfferData
-        val pickupAddr = od?.moradaRecolha?.takeIf { it.isNotBlank() }
-        val destAddr   = od?.moradaDestino?.takeIf { it.isNotBlank() }
+        val od = currentOfferData ?: return
 
-        // 1) Atualiza o mapa (se ele já estiver aberto) via broadcast
+        val pickupAddr = od.moradaRecolha?.takeIf { it.isNotBlank() }
+        val destAddr   = od.moradaDestino?.takeIf { it.isNotBlank() }
+
+        // Valor da oferta formatado
+        val offerRaw = od.value?.trim()
+        val offerNumeric = offerRaw
+            ?.replace("€", "")
+            ?.replace(" ", "")
+            ?.replace(",", ".")
+            ?.toDoubleOrNull()
+
+        val offerVal = offerNumeric?.let { "€ " + euroOfferFormatter.format(it) }
+            ?: offerRaw?.let { raw ->
+                val t = raw.trim()
+                if (t.startsWith("€")) t else "€ $t"
+            } ?: "€ —"
+
+        // €/km planeado
+        val vpk = od.calculateProfitability()
+        val eurKm = vpk?.let {
+            "€ " + String.format(Locale("pt", "PT"), "%.2f", it)
+        } ?: "—"
+
+        // km totais (pickup + viagem)
+        val totalKmNum = od.calculateTotalDistance()
+        val totalKm = totalKmNum?.let {
+            String.format(Locale("pt", "PT"), "%.1f", it)
+        } ?: "—"
+
+        // €/hora planeado
+        val vph = od.calculateValuePerHour()
+        val plannedHour = vph?.let { "€ " + euroHoraFormatter.format(it) } ?: "—"
+
+        fun legSuffix(distRaw: String?, durRaw: String?): String? {
+            val d = distRaw.toDoubleOrNullWithCorrection()
+            val m = durRaw.toIntOrNullWithCorrection()
+            if (d == null && m == null) return null
+            val parts = mutableListOf<String>()
+            d?.let { parts += String.format(Locale("pt", "PT"), "%.1f km", it) }
+            m?.let { parts += "$m min" }
+            return parts.joinToString(" · ")
+        }
+
+        val pickupSuffix = legSuffix(od.pickupDistance, od.pickupDuration)
+        val destSuffix   = legSuffix(od.tripDistance, od.tripDuration)
+
+        // 1) UPDATE_MAP para atualizar markers/rotas + card
         runCatching {
             val upd = Intent(MapPreviewActivity.ACTION_UPDATE_MAP).apply {
                 setPackage(context.packageName)
                 pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
                 destAddr?.let   { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS,   it) }
+
+                putExtra(MapPreviewActivity.EXTRA_CARD_OFFER_VALUE, offerVal)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_KM, eurKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_TOTAL_KM, totalKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_HOUR_PLANNED, plannedHour)
+
+                pickupSuffix?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_SUFFIX_FROM_CARD, it) }
+                destSuffix?.let   { putExtra(MapPreviewActivity.EXTRA_DEST_SUFFIX_FROM_CARD, it) }
             }
             context.sendBroadcast(upd)
         }
 
-        // 2) Se NÃO for para mostrar, paramos aqui (não abrimos a activity!)
         if (!show) return
 
-        // 3) Abrir/Trazer à frente o mapa e auto-hide
+        // 2) Abrir / trazer à frente o MapPreviewActivity, fullscreen com header
         runCatching {
             val open = Intent(context, MapPreviewActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MapPreviewActivity.EXTRA_FULLSCREEN, true)
+                putExtra(MapPreviewActivity.EXTRA_SHOW_HEADER, true)
+
                 pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
                 destAddr?.let   { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS,   it) }
+
+                putExtra(MapPreviewActivity.EXTRA_CARD_OFFER_VALUE, offerVal)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_KM, eurKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_TOTAL_KM, totalKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_HOUR_PLANNED, plannedHour)
+
+                pickupSuffix?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_SUFFIX_FROM_CARD, it) }
+                destSuffix?.let   { putExtra(MapPreviewActivity.EXTRA_DEST_SUFFIX_FROM_CARD, it) }
             }
             context.startActivity(open)
-        }.onFailure { Log.e(TAG, "Falha ao abrir MapPreviewActivity: ${it.message}") }
+        }.onFailure {
+            Log.e(TAG, "Falha ao abrir MapPreviewActivity: ${it.message}")
+        }
 
-        val dur = forceShowMs ?: defaultAutoHideMs
+        // 3) Pedir SHOW ao MapPreviewActivity (sem auto-hide, como no tracking)
+        val dur = forceShowMs ?: 0L
         runCatching {
             val showIntent = Intent(MapPreviewActivity.ACTION_SEMAFORO_SHOW_MAP).apply {
                 setPackage(context.packageName)
                 putExtra(MapPreviewActivity.EXTRA_AUTO_HIDE_MS, dur)
-                putExtra(MapPreviewActivity.EXTRA_FADE_MS, defaultFadeMs)
+                putExtra(MapPreviewActivity.EXTRA_FADE_MS, 400L)
+                putExtra(MapPreviewActivity.EXTRA_FULLSCREEN, true)
             }
             context.sendBroadcast(showIntent)
         }
-        syncMapAlpha(viewAlpha)
     }
-    private fun syncMapAlpha(a: Float) {
-        val aClamped = a.coerceIn(0f, 1f)
-        if (kotlin.math.abs(aClamped - lastAlphaSent) < 0.005f) return
-        lastAlphaSent = aClamped
-        runCatching {
-            val i = Intent(MapPreviewActivity.ACTION_SEMAFORO_ALPHA).apply {
-                setPackage(context.packageName)
-                putExtra(MapPreviewActivity.EXTRA_ALPHA, aClamped)
-            }
-            context.sendBroadcast(i)
-        }
-        if (aClamped <= 0.01f) {
-            runCatching {
-                val hide = Intent(MapPreviewActivity.ACTION_SEMAFORO_HIDE_MAP).apply {
-                    setPackage(context.packageName)
-                }
-                context.sendBroadcast(hide)
-            }
-        }
-    }
-
-    // ======================= Ações =======================
-    private fun openMapPreview() { openOrUpdateMapForCurrentOffer(show = true, forceShowMs = 12_000L) }
 
     private fun showStartConfirmDialog() {
         val dialog = AlertDialog.Builder(context)
@@ -396,8 +563,10 @@ class OverlayView(context: Context) : View(context) {
             }
         }
 
-        try { dialog.show() } catch (ex: Exception) {
-            Log.e(TAG, "Falha ao mostrar confirmação de início: ${ex.message}")
+        try {
+            dialog.show()
+        } catch (ex: Exception) {
+            Log.e(TAG, "Falha confirmação: ${ex.message}")
             showBanner("A iniciar viagem…", BannerType.INFO, 1500)
             startTrackingMode()
         }
@@ -410,99 +579,62 @@ class OverlayView(context: Context) : View(context) {
                 putExtra(OverlayService.EXTRA_OFFER_DATA, currentOfferData)
                 putExtra(OverlayService.EXTRA_EVALUATION_RESULT, currentEvaluationResult)
             }
-            try { context.startService(startTrackingIntent) } catch (ex: Exception) {
-                Log.e(TAG, "Erro ao enviar START_TRACKING: ${ex.message}")
+            try {
+                context.startService(startTrackingIntent)
+            } catch (ex: Exception) {
+                Log.e(TAG, "Erro START_TRACKING: ${ex.message}")
             }
         } else {
             showBanner("Sem dados para iniciar", BannerType.WARNING, 2000)
         }
     }
 
-    private fun showRawTextDialog() {
-        val txt = currentOfferData?.rawText?.takeIf { it.isNotBlank() } ?: "(rawText vazio)"
-        val dialog = AlertDialog.Builder(context)
-            .setTitle("OCR bruto (rawText)")
-            .setMessage(txt)
-            .setPositiveButton("Copiar") { d, _ ->
-                try {
-                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("rawText", txt))
-                } catch (_: Exception) {}
-                d.dismiss()
-            }
-            .setNegativeButton("Fechar") { d, _ -> d.dismiss() }
-            .create()
-
-        dialog.window?.let { w ->
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                w.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-            } else {
-                @Suppress("DEPRECATION")
-                w.setType(WindowManager.LayoutParams.TYPE_PHONE)
-            }
-        }
-        try { dialog.show() } catch (ex: Exception) {
-            Log.e(TAG, "Falha ao mostrar rawText: ${ex.message}")
-        }
-    }
-
-    // ======================= Medidas e escalas =======================
+    // ================= Dimensões =================
     private fun updateDimensionsAndPaints() {
-        val dm = resources.displayMetrics
+        val ui = fontSizeScale.coerceIn(0.7f, 1.6f)
 
-        // dp “fixos” do cartão e textos
-        paddingPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, PADDING_DP, dm)
-        borderRadiusPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, CORNER_RADIUS_DP, dm)
-        textSpacingVerticalPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TEXT_SPACING_VERTICAL_DP, dm)
-        lineSpacingVerticalPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, LINE_SPACING_VERTICAL_DP, dm)
-        textSpacingHorizontalPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TEXT_SPACING_HORIZONTAL_DP, dm)
-        indicatorBarWidthPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, INDICATOR_BAR_WIDTH_DP, dm)
-        indicatorBarMarginPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, INDICATOR_BAR_MARGIN_DP, dm)
-        swipeMinDistancePx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, SWIPE_MIN_DISTANCE_DP, dm)
-        swipeThresholdVelocityPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, SWIPE_THRESHOLD_VELOCITY_DP, dm)
-        bannerPadHPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, BANNER_PAD_H_DP, dm)
-        bannerPadVPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, BANNER_PAD_V_DP, dm)
-        bannerCornerPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, BANNER_CORNER_DP, dm)
+        paddingPx = dp(PADDING_DP) * ui
+        borderRadiusPx = dp(CORNER_RADIUS_DP) * ui
+        textSpacingVerticalPx = dp(TEXT_SPACING_VERTICAL_DP) * ui
+        lineSpacingVerticalPx = dp(LINE_SPACING_VERTICAL_DP) * ui
+        textSpacingHorizontalPx = dp(TEXT_SPACING_HORIZONTAL_DP) * ui
+        swipeMinDistancePx = dp(SWIPE_MIN_DISTANCE_DP)
+        swipeThresholdVelocityPx = dp(SWIPE_THRESHOLD_VELOCITY_DP)
+        bannerPadHPx = dp(BANNER_PAD_H_DP)
+        bannerPadVPx = dp(BANNER_PAD_V_DP)
+        bannerCornerPx = dp(BANNER_CORNER_DP)
 
-        borderPaint.strokeWidth = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, BORDER_WIDTH_DP, dm)
+        cardOuterMarginPx = dp(CARD_OUTER_MARGIN_DP) * ui
+        cardPadPx = dp(CARD_PAD_DP) * ui
+        separatorHeightPx = dp(SEPARATOR_HEIGHT_DP)
+        badgeNoGoPx = dp(BADGE_NOGO_DP) * ui
 
-        // Textos (SP) — escalam com fontSizeScale via sp()
+        innerStrokePaint.strokeWidth   = dp(INNER_STROKE_DP)
+        coloredBorderPaint.strokeWidth = dp(COLORED_BORDER_WIDTH_DP) * ui
+
+        zoneDotRadiusPx = dp(ZONE_DOT_RADIUS_DP) * ui
+
+        // Textos
         labelTextPaint.textSize = sp(LABEL_TEXT_SIZE_SP)
         valueTextPaint.textSize = sp(VALUE_TEXT_SIZE_SP)
+        addressHighlightPaint.textSize = sp(VALUE_TEXT_SIZE_SP)
         highlightValueTextPaint.textSize = sp(HIGHLIGHT_VALUE_TEXT_SIZE_SP)
         extraHighlightValueTextPaint.textSize = sp(EXTRA_HIGHLIGHT_VALUE_TEXT_SIZE_SP)
         placeholderTextPaint.textSize = sp(HIGHLIGHT_VALUE_TEXT_SIZE_SP)
         bannerTextPaint.textSize = sp(BANNER_TEXT_SIZE_SP)
 
-        // ===== Escala PROPORCIONAL do semáforo (geometria) =====
-        val ui = fontSizeScale.coerceIn(0.7f, 1.6f)
+        // Cabeçalho
+        headerOfferPaint.textSize = sp(HEADER_TITLE_SP)
+        headerHourPaint.textSize  = sp(HEADER_EURH_SP)
+        headerKmPaint.textSize    = sp(HEADER_EURKM_SP)
 
-        // Círculo / anel
-        outerStrokePx    = dp(OUTER_STROKE_DP)    * ui
-        innerPaddingPx   = dp(INNER_PADDING_DP)   * ui
-        prohibitSizePx   = dp(PROHIBIT_SIZE_DP)   * ui
-        prohibitStrokePx = dp(PROHIBIT_STROKE_DP) * ui
-        ringPaint.strokeWidth = outerStrokePx
-        prohibitRingPaint.strokeWidth = prohibitStrokePx
+        // Zona ícone
+        zoneIconPaint.textSize = sp(ZONE_ICON_SIZE_SP)
 
-        // Textos do semáforo
-        hourTextPaint.textSize = sp(HOUR_TEXT_SP)
-        offerTinyPaint.textSize = sp(OFFER_TEXT_SP)
-        kmTextPaint.textSize = sp(KM_TEXT_SP)
-
-        // Quadro do verso
-        backCardCornerPx = dp(12f) * ui
-        backCardPadPx    = dp(16f) * ui
-        backCardStrokePaint.strokeWidth = dp(1f) * ui
-
-        // Alturas derivadas (dependem do tamanho atual do texto)
         labelHeight = labelTextPaint.descent() - labelTextPaint.ascent()
         valueHeight = valueTextPaint.descent() - valueTextPaint.ascent()
         highlightValueHeight = highlightValueTextPaint.descent() - highlightValueTextPaint.ascent()
         extraHighlightValueHeight = extraHighlightValueTextPaint.descent() - extraHighlightValueTextPaint.ascent()
-
-        // Espaço entre linhas com respiração proporcional
-        lineGapPx = max(dp(8f) * ui, valueHeight * 0.32f)
     }
 
     private fun sp(sizeSp: Float): Float =
@@ -511,94 +643,39 @@ class OverlayView(context: Context) : View(context) {
     private fun dp(v: Float): Float =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics)
 
-    // ======================= onMeasure =======================
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         updateDimensionsAndPaints()
-        val bannerExtra = if (bannerText != null) (bannerPadVPx * 2 + bannerTextPaint.textSize) + textSpacingVerticalPx else 0f
 
-        if (!showBack) {
-            // Frente — círculo
-            val sample = "88,8 €"
-            val textW = hourTextPaint.measureText(sample)
-            val textH = hourTextPaint.descent() - hourTextPaint.ascent()
+        val bannerExtra = if (bannerText != null)
+            (bannerPadVPx * 2 + bannerTextPaint.textSize) + textSpacingVerticalPx
+        else 0f
 
-            val ui = fontSizeScale.coerceIn(0.7f, 1.6f)
+        // Queremos um cartão quase quadrado e um pouco maior
+        val sample = "88,8 €"
+        val textW = headerHourPaint.measureText(sample)
+        val textH = headerHourPaint.descent() - headerHourPaint.ascent()
 
-            // O que o texto precisaria
-            val byText = (max(textW, textH) + innerPaddingPx * 2f + outerStrokePx * 2f)
-            // Mínimo em dp que também escala com o slider
-            val byDp   = dp(MIN_CIRCLE_DIAMETER_DP) * ui
-            val minDiameter = max(byText, byDp)
+        val ui = fontSizeScale.coerceIn(0.7f, 1.6f)
 
-            // Respiração extra para o €/km (proporcional)
-            val extraBottomForSubtext = dp(22f) * ui
-            val sideMargin = dp(18f) * ui
+        val byText = max(textW, textH) + dp(8f) * 2f * ui
+        val byDp   = dp(150f) * ui         // base maior que antes
+        val baseSize = max(byText, byDp)
 
-            val desiredW = (minDiameter + sideMargin).toInt()
-            val desiredH = (minDiameter + bannerExtra + extraBottomForSubtext).toInt()
+        val widthFactor = 1.05f           // quase quadrado
+        val heightFactor = 1.05f
+        val extraBottom = dp(18f) * ui
 
-            val w = resolveSize(desiredW, widthMeasureSpec)
-            val h = resolveSize(desiredH, heightMeasureSpec)
-            setMeasuredDimension(w, h)
-            return
-        }
+        val desiredW = (baseSize * widthFactor).toInt()
+        val desiredH = (baseSize * heightFactor + bannerExtra + extraBottom).toInt()
 
-        // Verso — medir pelo conteúdo
-        val widthMode = MeasureSpec.getMode(widthMeasureSpec)
-        val widthSize = MeasureSpec.getSize(widthMeasureSpec)
-        val targetW = when (widthMode) {
-            MeasureSpec.EXACTLY -> widthSize
-            MeasureSpec.AT_MOST -> min(widthSize, dp(460f).toInt())
-            else -> dp(360f).toInt()
-        }
-
-        val outerMargin = dp(12f)
-        val contentWidth = (targetW - (outerMargin * 2f) - (backCardPadPx * 2f)).coerceAtLeast(dp(200f))
-
-        val od = currentOfferData
-        val pickupAddr = od?.moradaRecolha?.takeIf { it.isNotBlank() } ?: "—"
-        val destAddr   = od?.moradaDestino?.takeIf { it.isNotBlank() } ?: "—"
-
-        val pickupLines = wrapLinesCount(pickupAddr, contentWidth, valueTextPaint)
-        val destLines   = wrapLinesCount(destAddr,   contentWidth, valueTextPaint)
-
-        var requiredH = 0f
-        requiredH += bannerExtra
-        requiredH += outerMargin          // margem sup.
-        requiredH += backCardPadPx        // padding top card
-
-        // Plataforma
-        requiredH += labelHeight + lineGapPx
-        requiredH += valueHeight + lineGapPx
-
-        // Recolha
-        requiredH += labelHeight + lineGapPx
-        requiredH += pickupLines * (valueHeight + lineGapPx)
-        requiredH += lineGapPx + labelHeight + lineGapPx + valueHeight
-
-        // separador + gap
-        requiredH += valueHeight + lineGapPx + dp(6f)
-        requiredH += dp(12f)
-
-        // Destino
-        requiredH += labelHeight + lineGapPx
-        requiredH += destLines * (valueHeight + lineGapPx)
-        requiredH += lineGapPx + labelHeight + lineGapPx + valueHeight
-
-        requiredH += backCardPadPx        // padding bottom
-        requiredH += outerMargin          // margem inf.
-
-        val measuredW = resolveSize(targetW, widthMeasureSpec)
-        val measuredH = resolveSize(requiredH.toInt(), heightMeasureSpec)
+        val measuredW = resolveSize(desiredW, widthMeasureSpec)
+        val measuredH = resolveSize(desiredH.toInt(), heightMeasureSpec)
         setMeasuredDimension(measuredW, measuredH)
     }
 
-    // ======================= Tamanho e desenho =======================
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         backgroundRect.set(0f, 0f, w.toFloat(), h.toFloat())
-        val halfBorder = borderPaint.strokeWidth / 2f
-        borderRect.set(halfBorder, halfBorder, w - halfBorder, h - halfBorder)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -611,142 +688,202 @@ class OverlayView(context: Context) : View(context) {
         val finalBorder = if (providedCombined == recomputed) providedCombined else recomputed
 
         backgroundPaint.alpha = (viewAlpha * 255).toInt()
-        borderPaint.alpha = (viewAlpha * 255).toInt()
 
-        if (showBack) {
-            // **Só** no verso desenhamos o cartão
-            borderPaint.color = getBorderColor(finalBorder)
-            canvas.drawRoundRect(backgroundRect, borderRadiusPx, borderRadiusPx, backgroundPaint)
-            canvas.drawRoundRect(borderRect,    borderRadiusPx, borderRadiusPx, borderPaint)
-            drawBannerIfNeeded(canvas)
-            drawBackPanel(canvas)
-        } else {
-            // Frente limpa (sem cartão)
-            drawBannerIfNeeded(canvas)
-            drawFrontRound(canvas, finalBorder)
-        }
+        // Banner normal (para outros textos, nunca "Oferta em fila")
+        drawBannerIfNeeded(canvas)
+
+        // Semáforo sempre visível aqui (o fade de 5s é gerido no OverlayService via alpha)
+        drawSingleCard(canvas, finalBorder)
     }
 
-    // ======================= Frente (semáforo redondo) =======================
-    // Cor do texto da plataforma (Bolt a verde)
-    private fun getPlatformColor(serviceType: String?): Int {
-        val s = serviceType?.lowercase(Locale.ROOT) ?: return TEXT_COLOR_VALUE
-        return if (s.contains("bolt")) BORDER_COLOR_GREEN else TEXT_COLOR_VALUE
+    private fun drawSingleCard(canvas: Canvas, finalBorder: BorderRating) {
+        val topOffset = if (bannerText != null)
+            (bannerPadVPx * 2 + bannerTextPaint.textSize) + dp(6f)
+        else 0f
+
+        val left   = cardOuterMarginPx
+        val top    = topOffset + cardOuterMarginPx
+        val right  = width.toFloat() - cardOuterMarginPx
+        val bottom = height.toFloat() - cardOuterMarginPx
+        cardRect.set(left, top, right, bottom)
+
+        val zoneFillBase = when (currentZoneState) {
+            ZoneState.PREFERRED -> ZONE_PREFERRED_FILL
+            ZoneState.NO_GO     -> ZONE_NO_GO_FILL
+            ZoneState.NEUTRAL   -> ZONE_NEUTRAL_FILL
+            ZoneState.UNKNOWN   -> ZONE_UNKNOWN_FILL
+        }
+        val zoneFill = zoneFillOverride ?: zoneFillBase
+
+        val cardFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = zoneFill
+            alpha = (viewAlpha * 255).toInt()
+        }
+
+        coloredBorderPaint.color = getBorderColor(finalBorder)
+        coloredBorderPaint.alpha = (viewAlpha * 255).toInt()
+        val borderW = coloredBorderPaint.strokeWidth
+        val borderHalf = borderW / 2f
+        canvas.drawRoundRect(cardRect, borderRadiusPx, borderRadiusPx, coloredBorderPaint)
+
+        val fillRect = RectF(
+            cardRect.left   + borderHalf,
+            cardRect.top    + borderHalf,
+            cardRect.right  - borderHalf,
+            cardRect.bottom - borderHalf
+        )
+        val fillRadius = (borderRadiusPx - borderHalf).coerceAtLeast(0f)
+        canvas.drawRoundRect(fillRect, fillRadius, fillRadius, cardFillPaint)
+
+        val innerInset = innerStrokePaint.strokeWidth / 2f
+        val innerRect = RectF(
+            fillRect.left   + innerInset,
+            fillRect.top    + innerInset,
+            fillRect.right  - innerInset,
+            fillRect.bottom - innerInset
+        )
+        val innerRadius = (fillRadius - innerInset).coerceAtLeast(0f)
+        canvas.drawRoundRect(innerRect, innerRadius, innerRadius, innerStrokePaint)
+
+        contentRect.set(
+            cardRect.left + cardPadPx,
+            cardRect.top  + cardPadPx,
+            cardRect.right - cardPadPx,
+            cardRect.bottom - cardPadPx
+        )
+
+        val od = currentOfferData
+
+        // -------- Topo esquerdo: oferta --------
+        val offerStr = od?.value?.let { raw ->
+            val num = raw
+                .replace("€", "")
+                .trim()
+                .replace(" ", "")
+                .replace(",", ".")
+                .toDoubleOrNull()
+            num?.let { "€ " + euroOfferFormatter.format(it) } ?: raw.trim()
+        } ?: PLACEHOLDER_TEXT
+
+        val headerTop = contentRect.top
+        val headerLeft = contentRect.left
+        val headerRight = contentRect.right
+        val centerX = (contentRect.left + contentRect.right) / 2f
+
+        val headerBaseline = headerTop - headerOfferPaint.ascent()
+
+        headerOfferPaint.color = TEXT_COLOR_VALUE
+        headerOfferPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(offerStr, headerLeft, headerBaseline, headerOfferPaint)
+
+        // -------- €/km: canto superior direito (lado oposto à oferta) --------
+        val vpk = od?.calculateProfitability()
+        val kmVal = vpk?.let { String.format(Locale("pt", "PT"), "%.2f", it) }
+        val kmStr = kmVal?.let { "€/km $it" } ?: "€/km —"
+
+        val kmPaint = TextPaint(valueTextPaint).apply {
+            color = getIndicatorColor(currentEvaluationResult?.kmRating ?: IndividualRating.UNKNOWN)
+            textAlign = Paint.Align.RIGHT
+            textSize = headerKmPaint.textSize
+        }
+        canvas.drawText(kmStr, headerRight, headerBaseline, kmPaint)
+
+        // -------- tempo + distância (canto inferior esquerdo) --------
+        val totalMinutes: Int? = run {
+            val p = od?.pickupDuration?.trim()?.toIntOrNull()
+            val t = od?.tripDuration?.trim()?.toIntOrNull()
+            val list = listOfNotNull(p, t)
+            if (list.isNotEmpty()) list.sum() else null
+        }
+        val totalMinStr = totalMinutes?.let { "${it} m" } ?: "—"
+
+        val totalKmVal = od?.calculateTotalDistance()
+        val totalKmStr = totalKmVal?.let {
+            String.format(Locale("pt", "PT"), "%.1f km", it)
+        } ?: "—"
+
+        val bottomText = "$totalMinStr   •   $totalKmStr"
+
+        valueTextPaint.color = TEXT_COLOR_VALUE
+        valueTextPaint.alpha = (viewAlpha * 255).toInt()
+
+        val bottomBaseline = contentRect.bottom - valueTextPaint.descent()
+
+        val timePaint = TextPaint(valueTextPaint).apply {
+            textAlign = Paint.Align.LEFT
+            color = TEXT_COLOR_VALUE
+        }
+        canvas.drawText(bottomText, contentRect.left, bottomBaseline, timePaint)
+
+        // -------- €/hora (ao centro do semáforo, com fonte menor) --------
+        val vph = od?.calculateValuePerHour()
+        val hourVal = vph?.let { euroHoraFormatter.format(it) }
+        val hourStr = hourVal?.let { "€/hora $it" } ?: "€/hora —"
+
+        headerHourPaint.color = getIndicatorColor(currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN)
+        headerHourPaint.textAlign = Paint.Align.CENTER
+
+        // Posiciona um pouco mais abaixo para dar espaço ao topo
+        val hourCenterY = contentRect.top + contentRect.height() * 0.35f
+        val hourBaseline = hourCenterY - (headerHourPaint.descent() + headerHourPaint.ascent()) / 2f
+        canvas.drawText(hourStr, centerX, hourBaseline, headerHourPaint)
+
+        // -------- Ícone da zona no centro do semáforo --------
+        drawZoneSymbolCenter(canvas)
     }
 
-    private fun drawFrontRound(canvas: Canvas, finalBorder: BorderRating) {
-        val textAlpha = (viewAlpha * 255).toInt()
-        ringPaint.alpha = textAlpha
-        innerPaint.alpha = textAlpha
-        hourTextPaint.alpha = textAlpha
-        offerTinyPaint.alpha = textAlpha
-        kmTextPaint.alpha = textAlpha
-
-        val ui = fontSizeScale.coerceIn(0.7f, 1.6f)
-
-        val cx = width.toFloat() / 2f
-        val bannerOffset = if (bannerText != null) (bannerPadVPx * 2 + bannerTextPaint.textSize) + dp(6f) * ui else 0f
-        val availableTop = bannerOffset + dp(6f) * ui
-        val availableBottom = height.toFloat() - dp(6f) * ui
-        val cy = (availableTop + availableBottom) / 2f
-
-        val maxDiameterAvail = min(width.toFloat(), (availableBottom - availableTop))
-        val outerR = maxDiameterAvail / 2f
-        val innerR = outerR - outerStrokePx - innerPaddingPx
-
-        // Miolo: BRANCO (pedido)
-        innerPaint.color = INNER_FILL_COLOR
-        canvas.drawCircle(cx, cy, innerR, innerPaint)
-
-        // Anel (cor combinada €/h + €/km)
-        ringPaint.color = getBorderColor(finalBorder)
-        canvas.drawCircle(cx, cy, innerR + innerPaddingPx + outerStrokePx / 2f, ringPaint)
-
-        // ===== VALOR DA OFERTA (POR CIMA do €/h), como estava antes =====
-        val offerStr = currentOfferData?.value?.takeIf { it.isNotBlank() }?.let { raw ->
-            val num = raw.replace("€", "").trim().replace(" ", "").replace(",", ".").toDoubleOrNull()
-            val formatted = num?.let { euroOfferFormatter.format(it) } ?: raw.trim()
-            "$formatted €"
-        } ?: ""
-        if (offerStr.isNotEmpty()) {
-            offerTinyPaint.textSize = sp(OFFER_TEXT_SP)
-            offerTinyPaint.color = Color.BLACK
-            val offerGap = dp(8f) * ui
-            val offerBaseline = (cy - (hourTextPaint.descent() + hourTextPaint.ascent()) / 2f) + hourTextPaint.ascent() - offerGap
-            val maxTextWidth = innerR * 1.5f
-            var sz = sp(OFFER_TEXT_SP)
-            offerTinyPaint.textSize = sz
-            while (offerTinyPaint.measureText(offerStr) > maxTextWidth && sz > sp(9f)) {
-                sz *= 0.92f
-                offerTinyPaint.textSize = sz
-            }
-            canvas.drawText(offerStr, cx, offerBaseline, offerTinyPaint)
+    private fun drawZoneSymbolCenter(canvas: Canvas) {
+        val icon = when (currentZoneState) {
+            ZoneState.PREFERRED -> "✅"
+            ZoneState.NO_GO     -> "🚫"   // sentido proibido, mais pequeno
+            ZoneState.NEUTRAL   -> "⚠️"
+            ZoneState.UNKNOWN   -> ""
         }
+        if (icon.isEmpty()) return
 
-        // Texto central: €/h (cor por rating da hora)
-        val valuePerHour = currentOfferData?.calculateValuePerHour()
-        val hourStr = valuePerHour?.let { "${euroHoraFormatter.format(it)} €" } ?: "--"
-        val hourBaseline = (cy - (hourTextPaint.descent() + hourTextPaint.ascent()) / 2f)
-        hourTextPaint.color = getIndicatorColor(currentEvaluationResult?.hourRating ?: IndividualRating.UNKNOWN)
-        canvas.drawText(hourStr, cx, hourBaseline, hourTextPaint)
+        zoneIconPaint.textAlign = Paint.Align.CENTER
 
-        // ===== Plataforma por BAIXO do €/h, mais acima (longe do €/km) =====
-        val platformPart = currentOfferData?.serviceType?.trim().orEmpty()
-        if (platformPart.isNotEmpty()) {
-            var sz = sp(PLATFORM_TEXT_SP)
-            offerTinyPaint.textSize = sz
-            val maxAllowed = innerR * 1.65f
-            var totalW = offerTinyPaint.measureText(platformPart)
-            while (totalW > maxAllowed && sz > sp(9f)) {
-                sz *= 0.92f
-                offerTinyPaint.textSize = sz
-                totalW = offerTinyPaint.measureText(platformPart)
-            }
-            val subGap = dp(4f) * ui // <<<< MAIS PERTO DO VALOR/HORA
-            val subBaseline = hourBaseline + subGap + (offerTinyPaint.textSize)
-            offerTinyPaint.color = getPlatformColor(platformPart)
-            canvas.drawText(platformPart, cx, subBaseline, offerTinyPaint)
-        }
-
-        // €/km no rodapé do círculo — cor por rating de KM (TAMANHO AUMENTADO)
-        val profitability = currentOfferData?.calculateProfitability()
-        val kmStr = profitability?.let { String.format(Locale.US, "%.2f €/km", it) } ?: "--"
-        val kmColorBase = getIndicatorColor(currentEvaluationResult?.kmRating ?: IndividualRating.UNKNOWN)
-        kmTextPaint.color = kmColorBase
-        val kmBottomMargin = dp(14f) * ui // <<<< MAIS AFASTADO DA PLATAFORMA
-        val kmBaseline = cy + innerR - kmBottomMargin
-        val maxKmWidth = innerR * 1.5f
-        var kmSz = sp(KM_TEXT_SP)
-        kmTextPaint.textSize = kmSz
-        while (kmTextPaint.measureText(kmStr) > maxKmWidth && kmSz > sp(8.5f)) {
-            kmSz *= 0.92f
-            kmTextPaint.textSize = kmSz
-        }
-        canvas.drawText(kmStr, cx, kmBaseline, kmTextPaint)
-
-        // Badge 🚫 se NO_GO (mantido)
-        if (currentZoneState == ZoneState.NO_GO) {
-            val badgeR = prohibitSizePx / 2f
-            val badgeCx = cx
-            val badgeCy = cy + innerR - badgeR - dp(4f) * ui
-            canvas.drawCircle(badgeCx, badgeCy, badgeR, badgeBgPaint)
-            canvas.drawCircle(badgeCx, badgeCy, badgeR - prohibitStrokePx / 2f, prohibitRingPaint)
-            val barH = prohibitStrokePx * 1.6f
-            val barLeft = badgeCx - badgeR * 0.55f
-            val barRight = badgeCx + badgeR * 0.55f
-            val barTop = badgeCy - barH / 2f
-            val barBottom = badgeCy + barH / 2f
-            canvas.drawRect(barLeft, barTop, barRight, barBottom, prohibitBarPaint)
-        }
+        val cx = (contentRect.left + contentRect.right) / 2f
+        val cy = contentRect.top + contentRect.height() * 0.7f
+        val baseline = cy - (zoneIconPaint.descent() + zoneIconPaint.ascent()) / 2f
+        canvas.drawText(icon, cx, baseline, zoneIconPaint)
     }
 
-    // ======================= Banner =======================
+    // Helpers antigos mantidos (não usados no layout atual)
+    private fun drawLabelWithDot(
+        canvas: Canvas,
+        text: String,
+        xLeft: Float,
+        topY: Float,
+        isPickup: Boolean
+    ) {
+        val cy = topY - labelTextPaint.ascent() / 2f
+        val dotPaint = if (isPickup) pickupDotPaint else destDotPaint
+        val dotCx = xLeft + zoneDotRadiusPx
+        canvas.drawCircle(dotCx, cy, zoneDotRadiusPx, dotPaint)
+
+        val textX = dotCx + zoneDotRadiusPx + dp(4f)
+        drawLabel(canvas, text, textX, topY)
+    }
+
+    private fun drawLabel(canvas: Canvas, text: String, xLeft: Float, topY: Float) {
+        labelTextPaint.color = TEXT_COLOR_LABEL
+        labelTextPaint.alpha = (viewAlpha * 255).toInt()
+        canvas.drawText(text, xLeft, topY - labelTextPaint.ascent(), labelTextPaint)
+    }
+
+    private fun drawValue(canvas: Canvas, text: String, xLeft: Float, topY: Float) {
+        valueTextPaint.color = TEXT_COLOR_VALUE
+        valueTextPaint.alpha = (viewAlpha * 255).toInt()
+        canvas.drawText(text, xLeft, topY - valueTextPaint.ascent(), valueTextPaint)
+    }
+
     private fun drawBannerIfNeeded(canvas: Canvas) {
         val text = bannerText?.trim().orEmpty()
         if (text.isEmpty()) return
 
         val textWidth = bannerTextPaint.measureText(text)
-
         val left = paddingPx
         val top = paddingPx
         val right = left + textWidth + (bannerPadHPx * 2)
@@ -769,162 +906,97 @@ class OverlayView(context: Context) : View(context) {
         canvas.drawText(text, textX, textY, bannerTextPaint)
     }
 
-    // ======================= Verso (quadro + moradas) =======================
-    private fun drawBackPanel(canvas: Canvas) {
-        val bannerOffset = if (bannerText != null)
-            (bannerPadVPx * 2 + bannerTextPaint.textSize) + dp(6f) else 0f
-
-        val left   = dp(12f)
-        val top    = bannerOffset + dp(12f)
-        val right  = width.toFloat() - dp(12f)
-        val bottom = height.toFloat() - dp(12f)
-        val card   = RectF(left, top, right, bottom)
-
-        backCardFillPaint.color = when (currentZoneState) {
-            ZoneState.PREFERRED -> ZONE_PREFERRED_FILL
-            ZoneState.NO_GO     -> ZONE_NO_GO_FILL
-            ZoneState.NEUTRAL   -> ZONE_NEUTRAL_FILL
-            ZoneState.UNKNOWN   -> Color.WHITE
-        }
-        backCardFillPaint.alpha  = (viewAlpha * 255).toInt()
-        backCardStrokePaint.color = Color.parseColor("#22000000")
-        backCardStrokePaint.alpha = (viewAlpha * 255).toInt()
-
-        canvas.drawRoundRect(card, backCardCornerPx, backCardCornerPx, backCardFillPaint)
-        canvas.drawRoundRect(card, backCardCornerPx, backCardCornerPx, backCardStrokePaint)
-
-        val contentLeft  = card.left + backCardPadPx
-        val contentTop   = card.top  + backCardPadPx
-        val contentRight = card.right - backCardPadPx
-        drawBackDetailsInto(canvas, contentLeft, contentTop, contentRight)
-    }
-
-    private fun drawBackDetailsInto(canvas: Canvas, leftX: Float, startTop: Float, rightX: Float) {
-        val od = currentOfferData
-
-        val pickupAddr = od?.moradaRecolha?.takeIf { it.isNotBlank() } ?: "—"
-        val destAddr   = od?.moradaDestino?.takeIf { it.isNotBlank() } ?: "—"
-
-        val pMin = od?.pickupDuration?.takeIf { it.isNotBlank() } ?: "—"
-        val pKm  = od?.pickupDistance?.takeIf { it.isNotBlank() }?.let { "$it km" } ?: "—"
-
-        val tMin = od?.tripDuration?.takeIf { it.isNotBlank() } ?: "—"
-        val tKm  = od?.tripDistance?.takeIf { it.isNotBlank() }?.let { "$it km" } ?: "—"
-
-        val platform = od?.serviceType?.takeIf { !it.isNullOrBlank() } ?: "—"
-        val platformColor = getPlatformColor(platform)
-
-        val textAlpha = (viewAlpha * 255).toInt()
-        labelTextPaint.alpha = textAlpha
-        valueTextPaint.alpha = textAlpha
-
-        var y = startTop
-        val maxWidth = rightX - leftX
-
-        labelTextPaint.textAlign = Paint.Align.LEFT
-        valueTextPaint.textAlign = Paint.Align.LEFT
-
-        // Plataforma
-        labelTextPaint.color = TEXT_COLOR_LABEL
-        canvas.drawText("Plataforma", leftX, y - labelTextPaint.ascent(), labelTextPaint)
-        y += labelHeight + lineGapPx
-
-        valueTextPaint.color = platformColor
-        canvas.drawText(platform, leftX, y - valueTextPaint.ascent(), valueTextPaint)
-        y += valueHeight + lineGapPx
-
-        // Recolha
-        labelTextPaint.color = TEXT_COLOR_LABEL
-        canvas.drawText("Recolha", leftX, y - labelTextPaint.ascent(), labelTextPaint)
-        y += labelHeight + lineGapPx
-
-        valueTextPaint.color = TEXT_COLOR_VALUE
-        y = drawMultilineText(canvas, pickupAddr, leftX, y, maxWidth, valueTextPaint)
-        y += lineGapPx
-
-        labelTextPaint.color = TEXT_COLOR_LABEL
-        canvas.drawText("Tempo / Distância", leftX, y - labelTextPaint.ascent(), labelTextPaint)
-        y += labelHeight + lineGapPx
-
-        valueTextPaint.color = TEXT_COLOR_VALUE
-        canvas.drawText("${pMin} m   •   $pKm", leftX, y - valueTextPaint.ascent(), valueTextPaint)
-
-        // Separador
-        y += valueHeight + lineGapPx + dp(6f)
-        canvas.drawLine(leftX, y, rightX, y, backCardStrokePaint)
-        y += dp(12f)
-
-        // Destino
-        labelTextPaint.color = TEXT_COLOR_LABEL
-        canvas.drawText("Destino", leftX, y - labelTextPaint.ascent(), labelTextPaint)
-        y += labelHeight + lineGapPx
-
-        valueTextPaint.color = TEXT_COLOR_VALUE
-        y = drawMultilineText(canvas, destAddr, leftX, y, maxWidth, valueTextPaint)
-        y += lineGapPx
-
-        labelTextPaint.color = TEXT_COLOR_LABEL
-        canvas.drawText("Tempo / Distância", leftX, y - labelTextPaint.ascent(), labelTextPaint)
-        y += labelHeight + lineGapPx
-
-        valueTextPaint.color = TEXT_COLOR_VALUE
-        canvas.drawText("${tMin} m   •   $tKm", leftX, y - valueTextPaint.ascent(), valueTextPaint)
-    }
-
-    // ======================= Helpers de texto =======================
-    private fun wrapLinesCount(text: String, maxWidth: Float, paint: TextPaint): Int {
+    private fun wrapLinesCountClamped(
+        text: String,
+        maxWidth: Float,
+        paint: TextPaint,
+        maxLines: Int
+    ): Int {
         val words = text.split(" ")
         var lines = 0
-        val sb = StringBuilder()
+        var sb = StringBuilder()
         for (w in words) {
             val test = if (sb.isEmpty()) w else sb.toString() + " " + w
             if (paint.measureText(test) <= maxWidth) {
                 if (sb.isEmpty()) sb.append(w) else sb.append(" ").append(w)
             } else {
-                if (sb.isNotEmpty()) { lines++; sb.setLength(0) }
-                sb.append(w)
+                lines++
+                sb = StringBuilder(w)
+                if (lines >= maxLines) break
             }
         }
-        if (sb.isNotEmpty()) lines++
+        if (lines < maxLines && sb.isNotEmpty()) lines++
         if (lines == 0) lines = 1
-        return lines
+        return min(lines, maxLines)
     }
 
-    private fun drawMultilineText(
+    private fun drawMultilineClamped(
         canvas: Canvas,
         text: String,
         x: Float,
         firstTopY: Float,
         maxWidth: Float,
-        paint: TextPaint
+        paint: TextPaint,
+        maxLines: Int
     ): Float {
         val words = text.split(" ")
         val lines = mutableListOf<String>()
         var current = StringBuilder()
+
+        fun pushLine() {
+            if (current.isNotEmpty()) {
+                lines += current.toString()
+                current = StringBuilder()
+            }
+        }
+
         for (w in words) {
             val test = if (current.isEmpty()) w else current.toString() + " " + w
             if (paint.measureText(test) <= maxWidth) {
-                if (current.isEmpty()) current.append(w) else { current.append(" "); current.append(w) }
+                if (current.isEmpty()) current.append(w)
+                else {
+                    current.append(" ")
+                    current.append(w)
+                }
             } else {
-                if (current.isNotEmpty()) lines += current.toString()
-                current = StringBuilder(w)
+                pushLine()
+                current.append(w)
+                if (lines.size >= maxLines - 1) break
             }
         }
-        if (current.isNotEmpty()) lines += current.toString()
+        pushLine()
 
-        var top = firstTopY
-        for ((i, ln) in lines.withIndex()) {
-            val baseline = top - paint.ascent()
-            canvas.drawText(ln, x, baseline, paint)
-            top = baseline + paint.descent()
-            if (i < lines.lastIndex) top += lineGapPx
+        return if (lines.size > maxLines) {
+            val cut = lines.take(maxLines).toMutableList()
+            val last = cut.last()
+            var ell = "$last…"
+            while (paint.measureText(ell) > maxWidth && ell.length > 2) {
+                ell = ell.dropLast(2) + "…"
+            }
+            cut[cut.lastIndex] = ell
+            cut.forEachIndexed { i, ln ->
+                val baseline = (if (i == 0) firstTopY else firstTopY +
+                        i * (paint.descent() - paint.ascent() + lineSpacingVerticalPx)
+                        ) - paint.ascent()
+                canvas.drawText(ln, x, baseline, paint)
+            }
+            firstTopY + cut.size *
+                    (paint.descent() - paint.ascent() + lineSpacingVerticalPx) -
+                    lineSpacingVerticalPx
+        } else {
+            var top = firstTopY
+            for ((i, ln) in lines.withIndex()) {
+                val baseline = top - paint.ascent()
+                canvas.drawText(ln, x, baseline, paint)
+                top = baseline + paint.descent()
+                if (i < lines.lastIndex) top += lineSpacingVerticalPx
+            }
+            top
         }
-        return top
     }
 
-    // ======================= API pública =======================
     fun updateFontSize(scale: Float) {
-        fontSizeScale = scale.coerceIn(0.5f, 2.0f)
+        fontSizeScale = scale.coerceIn(0.9f, 2.0f)
         requestLayout()
         invalidate()
     }
@@ -933,7 +1005,6 @@ class OverlayView(context: Context) : View(context) {
         val a = alphaValue.coerceIn(0.0f, 1.0f)
         viewAlpha = a
         alpha = a
-        syncMapAlpha(a)
         invalidate()
     }
 
@@ -942,20 +1013,32 @@ class OverlayView(context: Context) : View(context) {
         currentOfferData = offerData
         requestLayout()
         invalidate()
-
-        // Só enviamos UPDATE_MAP; abrir, só com long-press
+        // Atualiza markers/rotas no mapa, mas sem abrir
         openOrUpdateMapForCurrentOffer(show = false)
     }
 
-    fun showBanner(text: String, type: BannerType = BannerType.INFO, durationMs: Long = 2500L) {
-        bannerText = text.take(60)
+    fun showBanner(
+        text: String,
+        type: BannerType = BannerType.INFO,
+        durationMs: Long = 2500L
+    ) {
+        val trimmed = text.trim()
+        val upper = trimmed.uppercase(Locale.getDefault())
+
+        // "Oferta em fila" não desenha nada no semáforo (sem texto, sem seta)
+        if (upper.contains("OFERTA EM FILA")) {
+            return
+        }
+
+        bannerText = trimmed.take(60)
         bannerType = type
-        bannerClearAt = if (durationMs > 0) System.currentTimeMillis() + durationMs else 0L
+        bannerClearAt = if (durationMs > 0)
+            System.currentTimeMillis() + durationMs
+        else 0L
         requestLayout()
         invalidate()
     }
 
-    // ======================= Helpers de rating/cor =======================
     private fun getBorderColor(rating: BorderRating): Int = when (rating) {
         BorderRating.GREEN -> BORDER_COLOR_GREEN
         BorderRating.YELLOW -> BORDER_COLOR_YELLOW
@@ -970,7 +1053,10 @@ class OverlayView(context: Context) : View(context) {
         IndividualRating.UNKNOWN -> INDICATOR_COLOR_UNKNOWN
     }
 
-    private fun recomputeCombinedBorder(km: IndividualRating, hour: IndividualRating): BorderRating {
+    private fun recomputeCombinedBorder(
+        km: IndividualRating,
+        hour: IndividualRating
+    ): BorderRating {
         return when {
             km == IndividualRating.UNKNOWN || hour == IndividualRating.UNKNOWN -> BorderRating.GRAY
             km == IndividualRating.GOOD && hour == IndividualRating.GOOD       -> BorderRating.GREEN
@@ -979,51 +1065,32 @@ class OverlayView(context: Context) : View(context) {
         }
     }
 
-    // ======================= Ciclo de vida =======================
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        readLastZoneFromPrefs()?.let { updateZoneState(it) }
-
-        // Receiver opcional para ACTION_ZONE_HINT (anónimo)
-        runCatching {
-            val f = android.content.IntentFilter(ACTION_ZONE_HINT)
-            context.registerReceiver(object : android.content.BroadcastReceiver() {
-                override fun onReceive(c: Context?, i: Intent?) {
-                    if (i?.action != ACTION_ZONE_HINT) return
-                    val k = i.getStringExtra(EXTRA_ZONE_KIND)?.uppercase(Locale.getDefault())
-                    val st = when (k) {
-                        "NO_GO" -> ZoneState.NO_GO
-                        "PREFERRED" -> ZoneState.PREFERRED
-                        "NEUTRAL" -> ZoneState.NEUTRAL
-                        else -> ZoneState.UNKNOWN
-                    }
-                    updateZoneState(st)
-                }
-            }, f)
-        }
-    }
-
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
-        runCatching {
-            val hide = Intent(MapPreviewActivity.ACTION_SEMAFORO_HIDE_MAP).apply { setPackage(context.packageName) }
-            context.sendBroadcast(hide)
-        }
-    }
-
-    // ======================= Prefs: última zona (fallback) =======================
     private fun readLastZoneFromPrefs(): ZoneState? {
         return try {
-            val prefs = context.getSharedPreferences("smartdriver_map_state", Context.MODE_PRIVATE)
-            val s = prefs.getString("last_zone_kind", null) ?: return null
-            when (s.uppercase(Locale.getDefault())) {
-                "NO_GO"      -> ZoneState.NO_GO
-                "PREFERRED"  -> ZoneState.PREFERRED
-                "NEUTRAL"    -> ZoneState.NEUTRAL
-                else         -> ZoneState.UNKNOWN
+            val prefs = context.getSharedPreferences(
+                "smartdriver_map_state",
+                Context.MODE_PRIVATE
+            )
+            val raw = prefs.getString("last_zone_kind", null) ?: return null
+            when (raw.uppercase(Locale.getDefault())) {
+                "NO_GO"     -> ZoneState.NO_GO
+                "PREFERRED" -> ZoneState.PREFERRED
+                "NEUTRAL"   -> ZoneState.NEUTRAL
+                "UNKNOWN"   -> ZoneState.UNKNOWN
+                else        -> ZoneState.UNKNOWN
             }
         } catch (_: Exception) {
             null
+        }
+    }
+
+    private fun saveLastZoneToPrefs(state: ZoneState) {
+        runCatching {
+            val prefs = context.getSharedPreferences(
+                "smartdriver_map_state",
+                Context.MODE_PRIVATE
+            )
+            prefs.edit().putString("last_zone_kind", state.name).apply()
         }
     }
 }

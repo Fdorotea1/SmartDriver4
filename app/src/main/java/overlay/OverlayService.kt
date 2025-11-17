@@ -35,7 +35,6 @@ import kotlin.math.abs
 import android.os.SystemClock
 import android.app.AlertDialog
 import android.os.Build
-import android.view.WindowManager
 import android.graphics.drawable.GradientDrawable
 
 // IMPORTS para links tocáveis nas moradas
@@ -52,6 +51,7 @@ class OverlayService : Service() {
 
     private var startConfirmDialog: AlertDialog? = null
     private var dismissConfirmDialog: AlertDialog? = null
+
     // ===== Helpers de clamp seguros (evitam ranges invertidos em foldables) =====
     private fun clampInt(value: Int, a: Int, b: Int): Int {
         val min = kotlin.math.min(a, b)
@@ -76,6 +76,25 @@ class OverlayService : Service() {
                 } catch (t: Throwable) {
                     Log.w(TAG_HEALTH, "onConfigChangedReposition() falhou: ${t.message}", t)
                 }
+            }
+        }
+    }
+
+    // --- Receiver para atualizações das Zonas (no-go, etc.) [INSERIDO] ---
+    private val zonesUpdatedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            if (i?.action == "com.example.smartdriver.ZONES_UPDATED") {
+                reEvaluateAllActiveCards()
+            }
+        }
+    }
+
+    // --- Receiver para hint de zona vindo do mini-mapa (separado para escopo correto) ---
+    private val zoneHintReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            if (i?.action == ACTION_ZONE_HINT) {
+                val kind = i.getStringExtra("zone_kind")
+                applyZoneSkinFromKind(kind)
             }
         }
     }
@@ -132,6 +151,56 @@ class OverlayService : Service() {
         }
     }
 
+    private fun anyToDoubleOrNull(v: Any?): Double? = when (v) {
+        null -> null
+        is Double -> v
+        is Float  -> v.toDouble()
+        is Number -> v.toDouble()
+        is String -> v.replace(",", ".").toDoubleOrNull()
+        else      -> v.toString().replace(",", ".").toDoubleOrNull()
+    }
+
+    // Geocodifica uma morada -> (lat, lon). Usa cache e trata exceções.
+    private fun geocodeAddress(address: String): Pair<Double, Double>? {
+        val key = address.trim().lowercase(Locale.ROOT)
+        geocodeCache.get(key)?.let { return it }
+        return try {
+            val geocoder = android.location.Geocoder(this, Locale.getDefault())
+            val res = geocoder.getFromLocationName(address, 1)
+            if (!res.isNullOrEmpty()) {
+                val lat = res[0].latitude
+                val lon = res[0].longitude
+                val pair = lat to lon
+                geocodeCache.put(key, pair)
+                pair
+            } else null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    // Pede geocodificação em background e reaplica a cor quando chegar.
+    private fun requestGeocodeAndReapply(off: OfferData) {
+        ensureGeocodeExec()
+        val dest = off.moradaDestino?.takeIf { it.isNotBlank() }
+        val pick = off.moradaRecolha?.takeIf { it.isNotBlank() }
+
+        geocodeExec?.submit {
+            // 1º DESTINO, depois RECOLHA
+            val p = dest?.let { geocodeAddress(it) } ?: pick?.let { geocodeAddress(it) }
+            if (p != null) {
+                // reaplicar no main thread
+                Handler(Looper.getMainLooper()).post {
+                    // Guardas no cache por assinatura de oferta para ficar mais rápido em próximos updates
+                    try { offerCoordCache[createOfferSignature(off)] = p } catch (_: Throwable) {}
+                    applyZoneColorForOffer(off)
+                }
+            } else {
+                // Sem sorte — deixa stroke neutro (já está) e regista log
+                Log.w("ZoneColor", "Geocode falhou (dest=${dest != null}, pick=${pick != null})")
+            }
+        }
+    }
 
     companion object {
         const val TAG_HEALTH = "OverlayHealth"
@@ -180,6 +249,9 @@ class OverlayService : Service() {
         const val EXTRA_TRANSPARENCY = "transparency"
         const val EXTRA_SHIFT_TARGET = "shift_target_extra"
         const val EXTRA_OVERLAY_Y_OFFSET = "extra_overlay_y_offset"
+
+        // Hint vindo do MapPreviewActivity (zona atual)
+        const val ACTION_ZONE_HINT = "com.example.smartdriver.overlay.ACTION_ZONE_HINT"
 
         const val HISTORY_PREFS_NAME = "SmartDriverHistoryPrefs"
         const val KEY_TRIP_HISTORY = "trip_history_list_json"
@@ -274,8 +346,8 @@ class OverlayService : Service() {
     private val overlayFadeHandler = Handler(Looper.getMainLooper())
     private val fadeToken = Any()
     private var baseOverlayAlpha: Float = 1.0f
-    private var fadedAlpha: Float = 0.15f
-    private var fadeDelayMs: Long = 10_000L
+    private var fadedAlpha: Float = 0.02f
+    private var fadeDelayMs: Long = 5_000L
     private var fadeAnimMs: Long = 400L
 
     // Banners topo
@@ -285,6 +357,19 @@ class OverlayService : Service() {
     private var offerIndicatorView: View? = null
     private var hasActiveOffer: Boolean = false
     private var isMainOverlayTranslucent: Boolean = false
+
+    // --- GEO fallback para ofertas sem coordenadas ---
+    private val geocodeCache = android.util.LruCache<String, Pair<Double, Double>>(128)
+    @Volatile private var geocodeExec: java.util.concurrent.ExecutorService? = null
+
+    // Cache por assinatura de oferta (v:value,pd,td,pt,tt) -> (lat,lon)
+    private val offerCoordCache = mutableMapOf<String, Pair<Double, Double>>()
+
+    private fun ensureGeocodeExec() {
+        if (geocodeExec == null || geocodeExec?.isShutdown == true) {
+            geocodeExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        }
+    }
 
     // Offset dinâmico
     private var baseOverlayYOffsetPx: Int = 0
@@ -312,6 +397,10 @@ class OverlayService : Service() {
     // ---------- Guardar o último semáforo mostrado ----------
     private var lastShownEval: EvaluationResult? = null
     private var lastShownOffer: OfferData? = null
+    // --------------------------------------------------------
+
+    // ---------- Oferta atualmente em acompanhamento (para o mapa do tracking) ----------
+    private var currentTrackingOfferForMap: OfferData? = null
     // --------------------------------------------------------
 
     // ---------- Popup de confirmação ----------
@@ -439,6 +528,28 @@ class OverlayService : Service() {
             Log.w(TAG_HEALTH, "Falha a registar configChangeReceiver: ${t.message}")
         }
 
+        // Ouvir hints do mini-mapa (zona atual)
+        try {
+            val hflt = IntentFilter(ACTION_ZONE_HINT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(zoneHintReceiver, hflt, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(zoneHintReceiver, hflt)
+            }
+        } catch (_: Throwable) { /* no-op */ }
+
+        // [INSERIDO] Escutar alterações das zonas (propagação imediata)
+        try {
+            val zflt = IntentFilter("com.example.smartdriver.ZONES_UPDATED")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(zonesUpdatedReceiver, zflt, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(zonesUpdatedReceiver, zflt)
+            }
+        } catch (_: Throwable) { /* no-op */ }
+
         startForeground(NOTIFICATION_ID, createNotification(getString(R.string.notification_overlay_ready)))
         addFloatingIconOverlay()
         if (shiftSession.isActive && !shiftSession.isPaused) startShiftTimer()
@@ -519,7 +630,6 @@ class OverlayService : Service() {
                 val ty = trackingLayoutParams.y
                 hideTrackingOverlay()
                 removeDropZoneView()
-                hideOfferIndicator()
                 hideFinishConfirmPrompt()
                 showFloatingIconAt(tx, ty)
 
@@ -627,7 +737,6 @@ class OverlayService : Service() {
                 return START_NOT_STICKY
             }
 
-
             // UI switches (novo)
             ACTION_SWITCH_TO_ICON -> switchBubbleToIconUiOnly()
             ACTION_SWITCH_TO_BUBBLE -> switchIconToBubbleUiOnly()
@@ -680,14 +789,15 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
 
-        // Unregister config receiver
-        try {
-            unregisterReceiver(configChangeReceiver)
-        } catch (_: Throwable) {
-        }
+        // Unregister receivers
+        try { unregisterReceiver(configChangeReceiver) } catch (_: Throwable) {}
+        try { unregisterReceiver(zonesUpdatedReceiver) } catch (_: Throwable) {}
+        try { unregisterReceiver(zoneHintReceiver) } catch (_: Throwable) {}
 
         super.onDestroy()
         if (tripTracker.isTracking) tripTracker.discard()
+        currentTrackingOfferForMap = null
+
         shiftSession.onServiceDestroyed()
         removeAllOverlays()
         isRunning.set(false)
@@ -700,6 +810,7 @@ class OverlayService : Service() {
         overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
     }
 
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     // ========================= Handlers de ações =========================
@@ -709,6 +820,7 @@ class OverlayService : Service() {
             showOverlayBanner("Acompanhamento já em curso", OverlayView.BannerType.INFO, 1500)
             return
         }
+
         val offer = lastShownOffer
         val eval = lastShownEval
         if (offer == null || eval == null) {
@@ -716,37 +828,59 @@ class OverlayService : Service() {
             return
         }
 
+        // Guardar oferta atual para o mapa do tracking
+        currentTrackingOfferForMap = offer
+
         // UI: esconder ícone e menu
         hideMainOverlay()
         removeQuickMenuOverlay()
         removeFloatingIconOverlay()
 
         val initialVpk = offer.calculateProfitability()
+        val initialDist = offer.calculateTotalDistance()?.takeIf { it > 0 }
+        val initialDur  = offer.calculateTotalTimeMinutes()?.takeIf { it > 0 }
+
+        // Mostrar a bolha de tracking
         showTrackingOverlay(
             initialVpk,
-            offer.calculateTotalDistance()?.takeIf { it > 0 },
-            offer.calculateTotalTimeMinutes()?.takeIf { it > 0 },
+            initialDist,
+            initialDur,
             offer.value,
             eval.kmRating,
             eval.combinedBorderRating
         )
+
+        // Posição inicial conveniente
         trackingOverlayView?.post { trackingOverlayView?.snapToTopRight() }
 
+        // €/h previsto (cor) herdado do semáforo, com fallback computado
         val hourFromEval = extractHourRatingFrom(eval)
         val baseHour = hourFromEval ?: computePlannedHourRatingFrom(offer)
         trackingOverlayView?.setInitialHourRatingFromSemaphore(baseHour)
-        if (isDebugBuild) Log.d(TAG_HOUR, "€/h prev. rating definido a partir de ${if (hourFromEval != null) "EVAL" else "COMPUTE"}: $baseHour")
+        if (isDebugBuild) {
+            Log.d(
+                TAG_HOUR,
+                "€/h prev. rating definido a partir de " +
+                        if (hourFromEval != null) "EVAL" else "COMPUTE" +
+                                ": $baseHour"
+            )
+        }
 
+        // Arranque de tracking de dados
         tripTracker.start(offer, eval)
 
-        try { offerQueue.clearOnStart() } catch (_: Exception) {}
+        try {
+            offerQueue.clearOnStart()
+        } catch (_: Exception) {
+        }
+
         OfferManager.getInstance(applicationContext).setTrackingActive(true)
         hideOfferIndicator()
         updateShiftNotification()
         updateIconPulseColor()
         showOverlayBanner("Tracking iniciado", OverlayView.BannerType.INFO, 1200)
 
-        // === NOVO: gerar tripId e enviar no STARTED ===
+        // TripId / eventos
         if (currentTripId == null) currentTripId = UUID.randomUUID().toString()
         sendBroadcast(Intent(ACTION_EVT_TRACKING_STARTED).apply {
             putExtra(EXTRA_TRIP_ID, currentTripId)
@@ -758,6 +892,7 @@ class OverlayService : Service() {
         startShiftTimer()
         touchActivity("startTrackingFromLast")
     }
+
 
     fun handleStartTracking(intent: Intent?) {
         if (isTrackingOverlayAdded) {
@@ -772,6 +907,9 @@ class OverlayService : Service() {
         val offerData = getParcelableExtraCompat(intent, EXTRA_OFFER_DATA, OfferData::class.java)
         val initialEval = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
         if (offerData != null && initialEval != null) {
+            // Guardar oferta atual para o mapa do tracking
+            currentTrackingOfferForMap = offerData
+
             // UI: limpar overlays que não interessam em tracking
             hideMainOverlay()
             removeQuickMenuOverlay()
@@ -779,24 +917,21 @@ class OverlayService : Service() {
 
             // Métricas iniciais do "semáforo"
             val initialVpk = offerData.calculateProfitability()
-            val initialDist = offerData.calculateTotalDistance()?.takeIf { (it ?: 0.0) > 0.0 }
-            val initialDurMin = offerData.calculateTotalTimeMinutes()?.takeIf { (it ?: 0) > 0 }
-            val offerValRaw = offerData.value
-            val kmRating = initialEval.kmRating
-            val combinedBorder = initialEval.combinedBorderRating
+            val initialDist = offerData.calculateTotalDistance()?.takeIf { it > 0 }
+            val initialDur = offerData.calculateTotalTimeMinutes()?.takeIf { it > 0 }
 
-            // Mostra/cria o overlay de tracking (bolha)
+            // Mostrar a bolha de tracking
             showTrackingOverlay(
                 initialVpk,
                 initialDist,
-                initialDurMin,
-                offerValRaw,
-                kmRating,
-                combinedBorder
+                initialDur,
+                offerData.value,
+                initialEval.kmRating,
+                initialEval.combinedBorderRating
             )
 
-            // >>> NOVO: injetar oferta atual no menu para a página MAPA conhecer Recolha/Destino
-            trackingOverlayView?.setOfferForMap(offerData)
+            // Injetar oferta atual no overlay de tracking para o mapa conhecer Recolha/Destino
+            trackingOverlayView?.setOfferForMap(currentTrackingOfferForMap)
 
             // Posição inicial conveniente
             trackingOverlayView?.post { trackingOverlayView?.snapToTopRight() }
@@ -806,11 +941,23 @@ class OverlayService : Service() {
             val baseHour = hourFromEval ?: computePlannedHourRatingFrom(offerData)
             trackingOverlayView?.setInitialHourRatingFromSemaphore(baseHour)
 
-            // Arranque de tracking de dados
+            if (isDebugBuild) {
+                Log.d(
+                    TAG_HOUR,
+                    "€/h prev. rating definido a partir de " +
+                            if (hourFromEval != null) "EVAL" else "COMPUTE" +
+                                    ": $baseHour"
+                )
+            }
+
+            // Arranque do tracking de dados
             tripTracker.start(offerData, initialEval)
 
-            // Estado da app/queue/indicadores
-            try { offerQueue.clearOnStart() } catch (_: Exception) {}
+            try {
+                offerQueue.clearOnStart()
+            } catch (_: Exception) {
+            }
+
             OfferManager.getInstance(applicationContext).setTrackingActive(true)
             hideOfferIndicator()
             updateShiftNotification()
@@ -829,6 +976,7 @@ class OverlayService : Service() {
         }
     }
 
+
     private fun handleStopTracking() {
         if (!stopBypassConfirmOnce) {
             if (finishConfirmDialog?.isShowing == true) return
@@ -836,7 +984,10 @@ class OverlayService : Service() {
             return
         }
         stopBypassConfirmOnce = false
+
         tripTracker.stopAndSave()
+        currentTrackingOfferForMap = null
+
         OfferManager.getInstance(applicationContext).setTrackingActive(false)
         removeDropZoneView()
         hideFinishConfirmPrompt()
@@ -845,23 +996,31 @@ class OverlayService : Service() {
         currentTripId = null
     }
 
+
     private fun handleDiscardCurrentTracking() {
         tripTracker.discard()
+        currentTrackingOfferForMap = null
+
         OfferManager.getInstance(applicationContext).setTrackingActive(false)
         removeDropZoneView()
         hideFinishConfirmPrompt()
+
         // voltar ao ícone no mesmo sítio
         val tx = trackingLayoutParams.x
         val ty = trackingLayoutParams.y
         hideTrackingOverlay()
         showFloatingIconAt(tx, ty)
+
         updateIconPulseColor()
         sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
         currentTripId = null
     }
 
+
     private fun handleHideOverlay() {
         if (tripTracker.isTracking) tripTracker.stopAndSave()
+        currentTrackingOfferForMap = null
+
         OfferManager.getInstance(applicationContext).setTrackingActive(false)
         removeAllOverlays()
         updateShiftNotification()
@@ -869,6 +1028,7 @@ class OverlayService : Service() {
         sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
         currentTripId = null
     }
+
 
     private fun handleShowOverlay(intent: Intent?) {
         val evalResult = getParcelableExtraCompat(intent, EXTRA_EVALUATION_RESULT, EvaluationResult::class.java)
@@ -889,6 +1049,10 @@ class OverlayService : Service() {
 
             overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
             mainOverlayView?.alpha = baseOverlayAlpha
+
+            // ✅ não aplicar hint aqui; a cor vem da oferta
+            // applyZoneSkinFromKind(readZoneKindFromPrefs())
+
             isMainOverlayTranslucent = false
             hasActiveOffer = true
             hideOfferIndicator()
@@ -1015,7 +1179,6 @@ class OverlayService : Service() {
             getSharedPreferences(HISTORY_PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putLong(KEY_SHIFT_START_MS, 0L).apply()
 
-
             updateMenuViewShiftUI(); updateShiftNotification()
             updateShiftStateChip()
             updateIconPulseColor()
@@ -1133,6 +1296,12 @@ class OverlayService : Service() {
         // >>> Em vez de updateState direto, regista no histórico e foca
         pushOrUpdate(oD, eR)
 
+        // Aplicar cor de zona da oferta visível (background do card)
+        applyZoneColorForOffer(oD)
+
+        // Aplicar destaque por morada (pickup/destino NO_GO → amarelo nas moradas)
+        applyAddressZoneKindsForOffer(oD)
+
         mainOverlayView?.setOnClickListener {
             overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
             mainOverlayView?.alpha = baseOverlayAlpha
@@ -1210,16 +1379,41 @@ class OverlayService : Service() {
     }
 
     private fun showTrackingOverlay(
-        iV: Double?, iD: Double?, iDu: Int?, oV: String?, iKR: IndividualRating, cB: BorderRating
+        iV: Double?,
+        iD: Double?,
+        iDu: Int?,
+        oV: String?,
+        iKR: IndividualRating,
+        cB: BorderRating
     ) {
         val wm = windowManager ?: return
-        if (trackingOverlayView == null) { trackingOverlayView = TrackingOverlayView(this, wm, trackingLayoutParams); applyAppearanceSettingsToView(trackingOverlayView) }
+
+        if (trackingOverlayView == null) {
+            trackingOverlayView = TrackingOverlayView(this, wm, trackingLayoutParams)
+            applyAppearanceSettingsToView(trackingOverlayView)
+        }
+
+        // Atualizar os dados iniciais do overlay de tracking
         trackingOverlayView?.updateInitialData(iV, iD, iDu, oV, iKR, cB)
+
+        // Garantir que o botão de tracking conhece a oferta atual em acompanhamento
+        currentTrackingOfferForMap?.let { off ->
+            trackingOverlayView?.setOfferForMap(off)
+        }
+
         try {
-            if (!isTrackingOverlayAdded && trackingOverlayView != null) { wm.addView(trackingOverlayView, trackingLayoutParams); isTrackingOverlayAdded = true }
-            else if (isTrackingOverlayAdded && trackingOverlayView != null) { wm.updateViewLayout(trackingOverlayView, trackingLayoutParams) }
-        } catch (_: Exception) { isTrackingOverlayAdded = false; trackingOverlayView = null }
+            if (!isTrackingOverlayAdded && trackingOverlayView != null) {
+                wm.addView(trackingOverlayView, trackingLayoutParams)
+                isTrackingOverlayAdded = true
+            } else if (isTrackingOverlayAdded && trackingOverlayView != null) {
+                wm.updateViewLayout(trackingOverlayView, trackingLayoutParams)
+            }
+        } catch (_: Exception) {
+            isTrackingOverlayAdded = false
+            trackingOverlayView = null
+        }
     }
+
     private fun hideTrackingOverlay() {
         if (isTrackingOverlayAdded && trackingOverlayView != null && windowManager != null) {
             try { windowManager?.removeViewImmediate(trackingOverlayView) } catch (_: Exception) {} finally {
@@ -1314,23 +1508,31 @@ class OverlayService : Service() {
             Toast.makeText(this, "Sem viagem em andamento", Toast.LENGTH_SHORT).show()
             return
         }
-        // Copiar pos do ícone
+
+        // Copiar a posição do ícone para a bolha
         trackingLayoutParams.x = floatingIconLayoutParams.x
         trackingLayoutParams.y = floatingIconLayoutParams.y
         removeQuickMenuOverlay()
         removeFloatingIconOverlay()
 
-        // Recriar bolha (dados iniciais podem ser do último semáforo)
-        val o = lastShownOffer
+        // Usar a oferta atualmente em acompanhamento; se não houver, cair no último semáforo
+        val o = currentTrackingOfferForMap ?: lastShownOffer
         val e = lastShownEval
+
         val iV = o?.calculateProfitability()
         val iD = o?.calculateTotalDistance()?.takeIf { (it ?: 0.0) > 0.0 }
         val iDu = o?.calculateTotalTimeMinutes()?.takeIf { (it ?: 0) > 0 }
         val oV = o?.value
         val kmR = e?.kmRating ?: IndividualRating.UNKNOWN
         val cB  = e?.combinedBorderRating ?: BorderRating.GRAY
+
+        // Sincronizar referência da oferta em acompanhamento
+        currentTrackingOfferForMap = o
+
+        // Recriar a bolha com os mesmos dados
         showTrackingOverlay(iV, iD, iDu, oV, kmR, cB)
     }
+
 
     @SuppressLint("ClickableViewAccessibility")
     private fun addQuickMenuOverlay() {
@@ -1462,8 +1664,6 @@ class OverlayService : Service() {
         }
     }
 
-
-
     // DROP ZONE
     private fun addDropZoneView() {
         val wm = windowManager ?: return
@@ -1516,6 +1716,7 @@ class OverlayService : Service() {
         if (rect != null && tripTracker.isTracking && touchUpX >= 0 && touchUpY >= 0) {
             if (rect.contains(touchUpX.toInt(), touchUpY.toInt())) {
                 tripTracker.discard()
+                currentTrackingOfferForMap = null
                 OfferManager.getInstance(applicationContext).setTrackingActive(false)
 
                 // Voltar ao ícone no mesmo sítio
@@ -1527,7 +1728,6 @@ class OverlayService : Service() {
                 showFloatingIconAt(tx, ty)
 
                 updateIconPulseColor()
-
                 sendBroadcast(Intent(ACTION_EVT_TRACKING_ENDED))
                 currentTripId = null
                 return
@@ -1535,6 +1735,7 @@ class OverlayService : Service() {
         }
         removeDropZoneView()
     }
+
 
     // Aparência / timers / util
     private fun applyAppearanceSettings(fSPercent: Int, tPercent: Int) {
@@ -1748,46 +1949,42 @@ class OverlayService : Service() {
 
     // Indicador "Oferta em fila"
     private fun showOfferIndicator() {
-        if (offerIndicatorView != null || windowManager == null) return
-        val inflater = LayoutInflater.from(this)
-        val view = inflater.inflate(R.layout.banner_center_queued_offer, null) as LinearLayout
+        // Se não houver WindowManager, não fazemos nada
+        if (windowManager == null) return
 
-        view.findViewById<TextView>(R.id.tvTitle)?.text = getString(R.string.queued_offer)
+        // Tenta obter o semáforo real (OverlayView) a partir da view principal
+        val overlay = mainOverlayView as? OverlayView ?: return
 
-        view.setOnClickListener {
-            overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
-            mainOverlayView?.alpha = baseOverlayAlpha
-            isMainOverlayTranslucent = false
-            hideOfferIndicator()
-            startOverlayFadeTimer()
-            touchActivity("queuedOfferTap")
+        // Reset ao fade: semáforo volta ao alpha base e recomeça o temporizador
+        overlayFadeHandler.removeCallbacksAndMessages(fadeToken)
+        overlay.alpha = baseOverlayAlpha
+        isMainOverlayTranslucent = false
+        startOverlayFadeTimer()
+
+        // Marca que há oferta ativa em fila (se usares esta flag noutros sítios)
+        hasActiveOffer = true
+
+        // Em vez do layout banner_center_queued_offer, delegamos para o OverlayView:
+        // lá dentro, "Oferta em fila" ativa o popup verde com seta branca
+        overlay.showBanner(
+            getString(R.string.queued_offer),
+            OverlayView.BannerType.INFO
+        )
+
+        // Mantemos o tracking de atividade, equivalente ao tap no banner antigo
+        touchActivity("queuedOfferTap")
+
+        // Garante que qualquer banner antigo não fica ligado ao WindowManager
+        offerIndicatorView?.let { v ->
+            try {
+                windowManager?.removeView(v)
+            } catch (_: Exception) {
+                // ignorar
+            }
         }
-
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-
-        val density = resources.displayMetrics.density
-        val lp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = (24 * density).toInt()
-        }
-
-        try {
-            windowManager?.addView(view, lp)
-            offerIndicatorView = view
-        } catch (_: Exception) {
-            offerIndicatorView = null
-        }
+        offerIndicatorView = null
     }
+
 
     private fun hideOfferIndicator() {
         val v = offerIndicatorView ?: return
@@ -2295,7 +2492,6 @@ class OverlayService : Service() {
     }
     // ========================================================================
 
-
     private fun showDismissConfirmPrompt() {
         if (dismissConfirmDialog?.isShowing == true) return
         if (!isMainOverlayAdded) return
@@ -2487,6 +2683,447 @@ class OverlayService : Service() {
         isDetailsVisible = false
     }
 
-    private fun dp(v: Int) = (resources.displayMetrics.density * v).toInt()
-    // =======================================================================
-}
+    // ====== [SUBSTITUIR] — Zona: aplicar cor por-oferta visível (destino > recolha) ======
+    // ====== [SUBSTITUIR] — Zona: aplicar cor por-oferta visível (destino > recolha) ======
+    private fun applyZoneColorForOffer(offer: OfferData?) {
+        val off = offer ?: run {
+            Log.w("ZoneColor", "applyZoneColorForOffer: offer é null")
+            // limpar visual → manda UNKNOWN para o OverlayView
+            try {
+                val i = Intent(com.example.smartdriver.overlay.OverlayView.ACTION_ZONE_HINT).apply {
+                    setPackage(packageName)
+                    putExtra(com.example.smartdriver.overlay.OverlayView.EXTRA_ZONE_KIND, "UNKNOWN")
+                }
+                sendBroadcast(i)
+            } catch (_: Exception) {}
+            return
+        }
+
+        Log.d("ZoneColor", "=== INÍCIO applyZoneColorForOffer ===")
+        Log.d("ZoneColor", "Offer: moradaRecolha=${off.moradaRecolha}, moradaDestino=${off.moradaDestino}")
+
+        // 1) Coordenadas: preferir DESTINO; fallback RECOLHA; depois cache; depois geocode
+        val sig = runCatching { createOfferSignature(off) }.getOrNull()
+        val cached = sig?.let { offerCoordCache[it] }
+
+        val dest = cached ?: extractOfferCoords(off, preferDestination = true)
+        Log.d("ZoneColor", "Coords DESTINO: $dest")
+
+        val pick = if (dest == null) extractOfferCoords(off, preferDestination = false) else null
+        Log.d("ZoneColor", "Coords RECOLHA (fallback): $pick")
+
+        val point = dest ?: pick
+        if (point == null) {
+            Log.w("ZoneColor", "SEM COORDENADAS - enviar UNKNOWN e requisitar geocode")
+            // informa o OverlayView para limpar (UNKNOWN)
+            try {
+                val i = Intent(com.example.smartdriver.overlay.OverlayView.ACTION_ZONE_HINT).apply {
+                    setPackage(packageName)
+                    putExtra(com.example.smartdriver.overlay.OverlayView.EXTRA_ZONE_KIND, "UNKNOWN")
+                }
+                sendBroadcast(i)
+            } catch (_: Exception) {}
+            // tenta obter coords em background e reaplica depois
+            requestGeocodeAndReapply(off)
+            Log.d("ZoneColor", "=== FIM applyZoneColorForOffer (sem coords; pedido geocode) ===")
+            return
+        }
+        val (lat, lon) = point
+        Log.d("ZoneColor", "Coordenadas finais: lat=$lat, lon=$lon")
+
+        // 2) Resolver zona por 3 camadas (Runtime -> GeoStore -> Repository)
+        var kindStr: String? = null
+
+        // A) ZoneRuntime
+        runCatching {
+            com.example.smartdriver.zones.ZoneRuntime.firstZoneMatch(lat, lon)
+        }.onSuccess { hit ->
+            if (hit != null) {
+                kindStr = when (hit.type) {
+                    com.example.smartdriver.zones.ZoneType.NO_GO      -> "NO_GO"
+                    com.example.smartdriver.zones.ZoneType.PREFERRED  -> "PREFERRED"
+                    com.example.smartdriver.zones.ZoneType.SOFT_AVOID -> "NEUTRAL"
+                }
+                Log.d("ZoneColor", "ZoneRuntime HIT → kind=$kindStr")
+            } else Log.d("ZoneColor", "ZoneRuntime: sem match")
+        }.onFailure { Log.w("ZoneColor", "ZoneRuntime falhou: ${it.message}") }
+
+        // B) GeoStore
+        if (kindStr == null) {
+            runCatching { com.example.smartdriver.zones.ZoneGeoStore.ensureLoaded(this) }
+            val gk = runCatching { com.example.smartdriver.zones.ZoneGeoStore.stateForPoint(lat, lon) }.getOrNull()
+            if (gk != null) {
+                kindStr = when (gk) {
+                    com.example.smartdriver.zones.ZoneGeoStore.ZoneKind.NO_GO     -> "NO_GO"
+                    com.example.smartdriver.zones.ZoneGeoStore.ZoneKind.PREFERRED -> "PREFERRED"
+                    else -> null
+                }
+                Log.d("ZoneColor", "GeoStore → kind=$kindStr")
+            }
+        }
+
+        // C) ZoneRepository (editor)
+        if (kindStr == null) {
+            val zoneHit = runCatching {
+                val zones = com.example.smartdriver.zones.ZoneRepository.list()
+                zones.firstOrNull { z -> zoneContainsFromRepository(z, lat, lon) }
+            }.getOrNull()
+            if (zoneHit != null) {
+                val typeStr = runCatching { readFieldOrGetter(zoneHit, "type")?.toString() }.getOrNull()
+                kindStr = when (typeStr) {
+                    "NO_GO"      -> "NO_GO"
+                    "SOFT_AVOID" -> "NEUTRAL"
+                    "PREFERRED"  -> "PREFERRED"
+                    else         -> null
+                }
+                Log.d("ZoneColor", "ZoneRepository → kind=$kindStr")
+            } else Log.d("ZoneColor", "ZoneRepository: sem match")
+        }
+
+        // 3) Enviar estado ao OverlayView via broadcast (é ele que pinta interior + badge)
+        val kindToSend = kindStr ?: "UNKNOWN"
+        Log.d("ZoneColor", "APLICAR (broadcast) kind=$kindToSend")
+        try {
+            val i = Intent(com.example.smartdriver.overlay.OverlayView.ACTION_ZONE_HINT).apply {
+                setPackage(packageName)
+                putExtra(com.example.smartdriver.overlay.OverlayView.EXTRA_ZONE_KIND, kindToSend)
+            }
+            sendBroadcast(i)
+        } catch (e: Exception) {
+            Log.e("ZoneColor", "Falha a enviar ACTION_ZONE_HINT: ${e.message}")
+            // fallback: tentar aceder direto se o view for OverlayView
+            (mainOverlayView as? com.example.smartdriver.overlay.OverlayView)?.updateZoneState(
+                when (kindToSend) {
+                    "NO_GO"     -> com.example.smartdriver.overlay.OverlayView.ZoneState.NO_GO
+                    "PREFERRED" -> com.example.smartdriver.overlay.OverlayView.ZoneState.PREFERRED
+                    "NEUTRAL"   -> com.example.smartdriver.overlay.OverlayView.ZoneState.NEUTRAL
+                    else        -> com.example.smartdriver.overlay.OverlayView.ZoneState.UNKNOWN
+                }
+            )
+        }
+
+        // 4) Cachear coordenadas da oferta (se ainda não tínhamos)
+        if (sig != null && cached == null) offerCoordCache[sig] = point
+
+        Log.d("ZoneColor", "=== FIM applyZoneColorForOffer ===")
+    }
+
+    /**
+     * Extrai (lat, lon) da OfferData por reflection.
+     * - preferDestination=true tenta destino primeiro; senão recolha primeiro.
+     * - Procura vários nomes comuns e também getters (getX / isX).
+     */
+    private fun extractOfferCoords(off: OfferData, preferDestination: Boolean): Pair<Double, Double>? {
+        val destLatKeys = listOf("destLat","destinationLat","dropoffLat","dropLat","destLatitude","destinationLatitude","dropoffLatitude")
+        val destLonKeys = listOf("destLon","destinationLon","destLng","destinationLng","dropoffLon","dropLon","dropoffLng","dropLng","destLongitude","destinationLongitude","dropoffLongitude")
+        val pickLatKeys = listOf("pickupLat","pickupLatitude","pickLat","sourceLat","originLat","startLat")
+        val pickLonKeys = listOf("pickupLon","pickupLng","pickupLongitude","pickLon","pickLng","sourceLon","originLon","startLon","sourceLng","originLng","startLng")
+
+        val (latKeys, lonKeys) = if (preferDestination) destLatKeys to destLonKeys else pickLatKeys to pickLonKeys
+
+        findLatLon(off, latKeys, lonKeys)?.let { return it }
+        val (altLatKeys, altLonKeys) = if (preferDestination) pickLatKeys to pickLonKeys else destLatKeys to destLonKeys
+        return findLatLon(off, altLatKeys, altLonKeys)
+    }
+
+    private fun findLatLon(target: Any, latKeys: List<String>, lonKeys: List<String>): Pair<Double, Double>? {
+        for (lk in latKeys) {
+            val lat = anyToDoubleOrNull(readFieldOrGetter(target, lk))
+            if (lat != null) {
+                for (ok in lonKeys) {
+                    val lon = anyToDoubleOrNull(readFieldOrGetter(target, ok))
+                    if (lon != null) return lat to lon
+                }
+            }
+        }
+        return null
+    }
+
+    /** Lê por reflection um campo ou getter (getX/isX), devolvendo Any? sem lançar exceções. */
+    private fun readFieldOrGetter(target: Any, name: String): Any? {
+        val cls = target.javaClass
+        val n = name.trim()
+        val cap = n.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+
+        // Campo: target.n
+        runCatching {
+            val f = cls.getDeclaredField(n)
+            f.isAccessible = true
+            return f.get(target)
+        }
+
+        // Getter: target.getName()
+        runCatching {
+            val m = cls.methods.firstOrNull { it.parameterCount == 0 && it.name == "get$cap" }
+            if (m != null) return m.invoke(target)
+        }
+
+        // Boolean: target.isName()
+        runCatching {
+            val m = cls.methods.firstOrNull { it.parameterCount == 0 && it.name == "is$cap" }
+            if (m != null) return m.invoke(target)
+        }
+
+        return null
+    }
+
+
+    /**
+     * Calcula, para uma oferta, se a recolha/destino caem em zonas NO_GO.
+     * Devolve pares "NO_GO" / "OK" (default = "OK" quando não há coords ou zona).
+     */
+    private fun computeAddressZoneKindsForOffer(offer: OfferData?): Pair<String, String> {
+        if (offer == null) return "OK" to "OK"
+
+        val pickupCoords = extractPickupCoordsFromOffer(offer)
+        val destCoords   = extractDestCoordsFromOffer(offer)
+
+        val pickupKind = pickupCoords?.let { (lat, lon) ->
+            val zone = runCatching {
+                com.example.smartdriver.zones.ZoneRuntime.firstZoneMatch(lat, lon)
+            }.getOrNull()
+            if (zone?.type == com.example.smartdriver.zones.ZoneType.NO_GO) "NO_GO" else "OK"
+        } ?: "OK"
+
+        val destKind = destCoords?.let { (lat, lon) ->
+            val zone = runCatching {
+                com.example.smartdriver.zones.ZoneRuntime.firstZoneMatch(lat, lon)
+            }.getOrNull()
+            if (zone?.type == com.example.smartdriver.zones.ZoneType.NO_GO) "NO_GO" else "OK"
+        } ?: "OK"
+
+        return pickupKind to destKind
+    }
+
+    /** Extrai coordenadas de RECOLHA da OfferData (se existirem campos tipo pickupLat/pickupLon/etc). */
+    private fun extractPickupCoordsFromOffer(off: OfferData): Pair<Double, Double>? {
+        val pickLatKeys = listOf(
+            "pickupLat", "pickupLatitude", "pickLat",
+            "sourceLat", "originLat", "startLat"
+        )
+        val pickLonKeys = listOf(
+            "pickupLon", "pickupLng", "pickupLongitude",
+            "pickLon", "pickLng",
+            "sourceLon", "originLon", "startLon",
+            "sourceLng", "originLng", "startLng"
+        )
+        return findLatLon(off, pickLatKeys, pickLonKeys)
+    }
+
+    /** Extrai coordenadas de DESTINO da OfferData (se existirem campos tipo destLat/destLon/etc). */
+    private fun extractDestCoordsFromOffer(off: OfferData): Pair<Double, Double>? {
+        val destLatKeys = listOf(
+            "destLat", "destinationLat", "dropoffLat", "dropLat",
+            "destLatitude", "destinationLatitude", "dropoffLatitude"
+        )
+        val destLonKeys = listOf(
+            "destLon", "destinationLon", "destLng", "destinationLng",
+            "dropoffLon", "dropLon", "dropoffLng", "dropLng",
+            "destLongitude", "destinationLongitude", "dropoffLongitude"
+        )
+        return findLatLon(off, destLatKeys, destLonKeys)
+    }
+
+    /**
+     * Aplica os "kinds" calculados ao semáforo, via OverlayView.setAddressZoneKinds(...).
+     * Se não houver oferta ou view, limpa o destaque (OK/OK).
+     */
+    private fun applyAddressZoneKindsForOffer(offer: OfferData?) {
+        val view = mainOverlayView ?: return
+        val (pickupKind, destKind) = computeAddressZoneKindsForOffer(offer)
+        view.setAddressZoneKinds(pickupKind, destKind)
+    }
+
+
+    /**
+     * Fallback via ZoneRepository:
+     * - Extrai os vértices de cada zona (tentando campos comuns em cada ponto: latitude/lat, longitude/lon/lng).
+     * - Usa ray-casting (lon/lat em GeoJSON) no primeiro “ring”.
+     */
+    private fun zoneContainsFromRepository(zone: Any, lat: Double, lon: Double): Boolean {
+        val typeStr = readFieldOrGetter(zone, "type")?.toString()?.uppercase(Locale.ROOT).orEmpty()
+        // ignorar zonas inativas se tiver esse campo
+        readFieldOrGetter(zone, "active")?.let { act ->
+            if (act is Boolean && !act) return false
+        }
+
+        val ptsList = readFieldOrGetter(zone, "points") as? Iterable<*>
+            ?: return false
+
+        // Extrair pares (lon,lat) de cada ponto
+        val ring = mutableListOf<Pair<Double, Double>>()
+        for (p in ptsList) {
+            val plat = anyToDoubleOrNull(readFieldOrGetter(p!!, "latitude")
+                ?: readFieldOrGetter(p, "lat")) ?: continue
+            val plon = anyToDoubleOrNull(readFieldOrGetter(p, "longitude")
+                ?: readFieldOrGetter(p, "lon")
+                ?: readFieldOrGetter(p, "lng")) ?: continue
+            ring += plon to plat // atenção: (lon,lat)
+        }
+        if (ring.size < 3) return false
+
+        // garantir ring fechado
+        if (ring.first() != ring.last()) ring += ring.first()
+
+        return ringContainsLonLat(ring, lon to lat)
+    }
+
+    // Ray-casting num ring [ (lon,lat), ... ]
+    private fun ringContainsLonLat(ring: List<Pair<Double, Double>>, point: Pair<Double, Double>): Boolean {
+        val (px, py) = point // (lon, lat)
+        var c = false
+        var j = ring.size - 1
+        for (i in ring.indices) {
+            val (ix, iy) = ring[i]
+            val (jx, jy) = ring[j]
+            val intersect = ((iy > py) != (jy > py)) &&
+                    (px < (jx - ix) * (py - iy) / ((jy - iy) + 1e-12) + ix)
+            if (intersect) c = !c
+            j = i
+        }
+        return c
+    }
+
+    /** Reavalia a zona da oferta visível quando as zonas mudam. */
+    private fun reEvaluateAllActiveCards() {
+        // usa o item focado no histórico (ou o último mostrado)
+        val pair = overlayHistory.getOrNull(currentIndex)
+            ?: overlayHistory.lastOrNull()
+            ?: (lastShownOffer?.let { o -> lastShownEval?.let { e -> o to e } })
+
+        val offer = pair?.first
+
+        // Recalcula cor de fundo do card
+        applyZoneColorForOffer(offer)
+
+        // Recalcula destaque pickup/destino (NO_GO/OK) nas moradas
+        applyAddressZoneKindsForOffer(offer)
+    }
+
+
+
+    // ==== Aparência baseada em zona (NO_GO / NEUTRAL / PREFERRED / UNKNOWN) ====
+    private fun readZoneKindFromPrefs(): String? {
+        return try {
+            getSharedPreferences("smartdriver_map_state", Context.MODE_PRIVATE)
+                .getString("last_zone_kind", null)
+        } catch (_: Exception) { null }
+    }
+
+    private fun applyZoneSkinFromKind(kind: String?) {
+        // ✅ Não sobrepor a cor quando há oferta visível
+        if (hasActiveOffer) return
+
+        val normalized = (kind ?: "UNKNOWN").uppercase(Locale.ROOT)
+        val color: Int? = when (normalized) {
+            "NO_GO"     -> 0xFFB71C1C.toInt()
+            "NEUTRAL", "SOFT_AVOID" -> 0xFFE65100.toInt()
+            "PREFERRED" -> 0xFF2E7D32.toInt()
+            else        -> null
+        }
+        setMainOverlayStroke(color)
+    }
+
+    // -- INÍCIO BLOCO SET MAIN OVERLAY STROKE (substituir o antigo + helpers) --
+
+    /** Procura, por heurística, a “view do card” dentro do OverlayView para pintar por dentro. */
+    private fun findCardView(root: View?): View? {
+        root ?: return null
+
+        // Se o root já tem background e padding, pode ser o próprio card
+        val rootLooksCard = (root.background != null) ||
+                (root.paddingLeft + root.paddingTop + root.paddingRight + root.paddingBottom > 0)
+        if (rootLooksCard) return root
+
+        // Se for um ViewGroup, tenta encontrar a melhor candidata percorrendo a árvore
+        if (root is ViewGroup) {
+            var best: View? = null
+            var bestScore = -1
+
+            fun scoreView(v: View): Int {
+                var s = 0
+                val w = v.width.takeIf { it > 0 } ?: v.measuredWidth
+                val h = v.height.takeIf { it > 0 } ?: v.measuredHeight
+                if (w > 0 && h > 0) s += 2                  // tem dimensão
+                if (v.background != null) s += 3            // tem bg próprio
+                val hasPad = v.paddingLeft + v.paddingTop + v.paddingRight + v.paddingBottom > 0
+                if (hasPad) s += 2                          // tem padding (parece container)
+                val cls = v.javaClass.simpleName.lowercase()
+                if ("card" in cls) s += 4                   // classes tipo *CardView*
+                return s
+            }
+
+            fun dfs(group: ViewGroup) {
+                for (i in 0 until group.childCount) {
+                    val child = group.getChildAt(i)
+                    val sc = scoreView(child)
+                    if (sc > bestScore) { bestScore = sc; best = child }
+                    if (child is ViewGroup) dfs(child)
+                }
+            }
+            dfs(root)
+            if (best != null) return best
+        }
+
+        // Fallback: usar o próprio root
+        return root
+    }
+
+    /** Garante um GradientDrawable reutilizável como background da view alvo. */
+    private fun ensureGradientBackground(target: View): GradientDrawable {
+        val tagKey = 0xA11CE0 // chave estável para tag
+        (target.getTag(tagKey) as? GradientDrawable)?.let { return it }
+
+        val gd = (target.background?.mutate() as? GradientDrawable) ?: GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            setColor(Color.parseColor("#FFFFFFFF")) // interior branco por omissão
+        }
+        target.setTag(tagKey, gd)
+        target.background = gd
+        return gd
+    }
+
+    /** Aplica alfa a uma cor sem mexer no RGB. */
+    private fun withAlpha(baseColor: Int, alphaFraction: Float): Int {
+        val a = (alphaFraction.coerceIn(0f, 1f) * 255).toInt()
+        val r = (baseColor shr 16) and 0xFF
+        val g = (baseColor shr 8) and 0xFF
+        val b = baseColor and 0xFF
+        return (a shl 24) or (r shl 16) or (g shl 8) or b
+    }
+
+    /**
+     * Pinta o **interior** do card do semáforo e o seu rebordo.
+     * - Se `color` for null: visual neutro (interior branco, stroke cinza suave)
+     * - Se `color` tiver valor: interior com “wash” dessa cor (20% alfa) + stroke forte dessa cor
+     */
+    private fun setMainOverlayStroke(color: Int?) {
+        val root = mainOverlayView ?: return
+        val card = findCardView(root) ?: root
+
+        val colorHex = color?.let { "#%08X".format(it) } ?: "null"
+        Log.d("ZoneColor", "setMainOverlayStroke($colorHex), hasActiveOffer=$hasActiveOffer")
+
+        // Garantir drawable do card
+        val gd = ensureGradientBackground(card)
+
+        if (color == null) {
+            // Estilo neutro
+            gd.setColor(Color.parseColor("#FFFFFFFF"))              // interior branco
+            gd.setStroke(dp(1), Color.parseColor("#33000000"))      // rebordo cinza suave
+        } else {
+            // Wash interior (não tapa o conteúdo) + rebordo na cor plena
+            gd.setColor(withAlpha(color, 0.20f))
+            gd.setStroke(dp(2), color)
+        }
+
+        // Aplicar no card (interior)
+        card.background = gd
+
+        // Se a root tiver um stroke exterior antigo, anulamos para não “vazar” para fora
+        (root.background?.mutate() as? GradientDrawable)?.setStroke(0, Color.TRANSPARENT)
+    }
+
+    private fun dp(v: Int) = (resources.displayMetrics.density * v).toInt() }
+
+// -- FIM BLOCO SET MAIN OVERLAY STROKE --

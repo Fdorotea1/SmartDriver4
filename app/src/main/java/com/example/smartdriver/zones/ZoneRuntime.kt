@@ -1,9 +1,11 @@
 package com.example.smartdriver.zones
 
-import kotlin.math.abs
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.PolyUtil
 
 /**
  * Geofencing leve: ponto-em-polígono para a primeira zona ativa que contiver o ponto.
+ * Usa Google Maps Utils para maior precisão.
  */
 object ZoneRuntime {
 
@@ -21,31 +23,21 @@ object ZoneRuntime {
 
     fun firstZoneMatch(lat: Double, lon: Double): Zone? {
         val zs = ZoneRepository.list().filter { it.active && it.points.size >= 3 }
+        val p = LatLng(lat, lon)
         for (z in zs) {
-            if (pointInPolygon(lat, lon, z)) return z
+            if (containsLatLng(p, z)) return z
         }
         return null
     }
 
-    // Ray casting (edge inclusive)
-    private fun pointInPolygon(lat: Double, lon: Double, zone: Zone): Boolean {
-        val pts = zone.points
-        var inside = false
-        var j = pts.size - 1
-        for (i in pts.indices) {
-            val xi = pts[i].latitude
-            val yi = pts[i].longitude
-            val xj = pts[j].latitude
-            val yj = pts[j].longitude
-
-            // Check if point is exactly on a vertex/edge (tolerância pequena)
-            if (abs(lat - xi) < 1e-9 && abs(lon - yi) < 1e-9) return true
-
-            val intersect = ((yi > lon) != (yj > lon)) &&
-                    (lat < (xj - xi) * (lon - yi) / ((yj - yi) + 1e-12) + xi)
-            if (intersect) inside = !inside
-            j = i
+    private fun containsLatLng(point: LatLng, zone: Zone): Boolean {
+        // Converte pontos da zona para Google LatLng (ordem correta: latitude, longitude)
+        val pts = zone.points.map { LatLng(it.latitude, it.longitude) }
+        return try {
+            PolyUtil.containsLocation(point, pts, /* geodesic = */ true)
+        } catch (_: Throwable) {
+            // fallback extremamente raro (lista vazia, etc.)
+            false
         }
-        return inside
     }
 }

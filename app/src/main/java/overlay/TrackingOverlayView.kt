@@ -22,6 +22,8 @@ import com.example.smartdriver.map.MapPreviewActivity
 import com.example.smartdriver.utils.BorderRating
 import com.example.smartdriver.utils.IndividualRating
 import com.example.smartdriver.utils.OfferData
+import com.example.smartdriver.utils.toDoubleOrNullWithCorrection
+import com.example.smartdriver.utils.toIntOrNullWithCorrection
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
@@ -69,27 +71,33 @@ class TrackingOverlayView(
         private const val PULSE_MIN_ALPHA = 120
         private const val PULSE_MAX_ALPHA = 255
         private const val PULSE_EXTRA_WIDTH_FACTOR = 2.0f
-
-        // Páginas
-        private const val TOTAL_PAGES = 5 // 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta | 4 MAPA
-        private const val PAGE_MAP = 4
-
-        // Tempo para abrir mapa automaticamente quando a página MAPA fica estável
-        private const val MAP_HOLD_MS = 2000L
     }
 
-    // páginas: 0 Tempo | 1 €/h | 2 (€/km + km) | 3 Oferta | 4 MAPA
+    // (mantemos referência, mesmo que só usemos a “página” 0)
     private var pageIndex = 0
+
     private var circleDiameterPx: Int
     private var paddingPx: Float
     private var borderWidthPx: Float
     private var safeMarginPx: Int
 
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = BG_COLOR }
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val haloPulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val mainPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_COLOR_MAIN; typeface = Typeface.DEFAULT_BOLD }
-    private val legendPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = LEGEND_COLOR }
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = BG_COLOR
+    }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+    private val haloPulsePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+    private val mainPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = TEXT_COLOR_MAIN
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    private val legendPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = LEGEND_COLOR
+    }
 
     private var mainTextHeight = 0f
     private var legendTextHeight = 0f
@@ -105,13 +113,9 @@ class TrackingOverlayView(
     private var initialWindowY: Int = 0
     private var initialTouchRawX: Float = 0f
     private var initialTouchRawY: Float = 0f
-    private val dragReadyRunnable = Runnable { dragReady = true; dragDelayPosted = false }
-
-    // Auto-open MAPA
-    private var mapAutoPosted = false
-    private val mapAutoRunnable = Runnable {
-        mapAutoPosted = false
-        openMapFromTracking()
+    private val dragReadyRunnable = Runnable {
+        dragReady = true
+        dragDelayPosted = false
     }
 
     // dados tempo/€/h (tempo real)
@@ -147,8 +151,11 @@ class TrackingOverlayView(
     private var pulseProgress = 0f // 0..1
     private var pulseAnimator: ValueAnimator? = null
 
-    // ---- NOVO: OfferData atual para alimentar o mapa quando abrir pelo menu
+    // OfferData atual para alimentar o mapa
     private var offerForMap: OfferData? = null
+
+    // estado local: mapa visível ou não (para toggle)
+    private var isMapVisible: Boolean = false
 
     init {
         val dm = resources.displayMetrics
@@ -173,72 +180,96 @@ class TrackingOverlayView(
             screenH = metrics.heightPixels
         } catch (_: Exception) {}
 
-        gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean {
-                initialWindowX = layoutParams.x
-                initialWindowY = layoutParams.y
-                initialTouchRawX = e.rawX
-                initialTouchRawY = e.rawY
-                isDragging = false
-                dragReady = false
-                if (!dragDelayPosted) {
-                    dragDelayPosted = true
-                    mainHandler.postDelayed(dragReadyRunnable, DRAG_ACTIVATION_DELAY_MS)
+        gestureDetector =
+            GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: MotionEvent): Boolean {
+                    initialWindowX = layoutParams.x
+                    initialWindowY = layoutParams.y
+                    initialTouchRawX = e.rawX
+                    initialTouchRawY = e.rawY
+                    isDragging = false
+                    dragReady = false
+                    if (!dragDelayPosted) {
+                        dragDelayPosted = true
+                        mainHandler.postDelayed(
+                            dragReadyRunnable,
+                            DRAG_ACTIVATION_DELAY_MS
+                        )
+                    }
+                    return true
                 }
-                return true
-            }
 
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if (isDragging) return false
-                cancelDragDelay()
-                sendOverlayServiceSimpleAction(OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP)
-                pageIndex = (pageIndex + 1) % TOTAL_PAGES
-                invalidate()
-                scheduleMapIfNeeded()
-                return true
-            }
+                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                    if (isDragging) return false
+                    cancelDragDelay()
+                    // Esconde drop zone, se estiver visível
+                    sendOverlayServiceSimpleAction(OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP)
 
-            override fun onScroll(e1: MotionEvent, e2: MotionEvent, dx: Float, dy: Float): Boolean {
-                val totalDeltaX = e2.rawX - initialTouchRawX
-                val totalDeltaY = e2.rawY - initialTouchRawY
-                val distanceEnough = (abs(totalDeltaX) > touchSlop * DRAG_DISTANCE_FACTOR) ||
-                        (abs(totalDeltaY) > touchSlop * DRAG_DISTANCE_FACTOR)
-
-                if (!isDragging && dragReady && distanceEnough) {
-                    isDragging = true
-                    sendOverlayServiceSimpleAction(OverlayService.ACTION_SHOW_DROP_ZONE)
+                    // Toggle do mapa
+                    if (isMapVisible) {
+                        hideMapFromTracking()
+                        isMapVisible = false
+                    } else {
+                        openMapFromTracking()
+                        isMapVisible = true
+                    }
+                    return true
                 }
-                if (isDragging) {
-                    applyClampedPosition(initialWindowX + totalDeltaX.toInt(), initialWindowY + totalDeltaY.toInt())
+
+                override fun onScroll(
+                    e1: MotionEvent,
+                    e2: MotionEvent,
+                    dx: Float,
+                    dy: Float
+                ): Boolean {
+                    val totalDeltaX = e2.rawX - initialTouchRawX
+                    val totalDeltaY = e2.rawY - initialTouchRawY
+                    val distanceEnough =
+                        (abs(totalDeltaX) > touchSlop * DRAG_DISTANCE_FACTOR) ||
+                                (abs(totalDeltaY) > touchSlop * DRAG_DISTANCE_FACTOR)
+
+                    if (!isDragging && dragReady && distanceEnough) {
+                        isDragging = true
+                        sendOverlayServiceSimpleAction(OverlayService.ACTION_SHOW_DROP_ZONE)
+                    }
+                    if (isDragging) {
+                        applyClampedPosition(
+                            initialWindowX + totalDeltaX.toInt(),
+                            initialWindowY + totalDeltaY.toInt()
+                        )
+                    }
+                    return true
                 }
-                return true
-            }
 
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (isDragging) return false
-                cancelDragDelay()
-                sendOverlayServiceSimpleAction(OverlayService.ACTION_STOP_TRACKING)
-                val intent = Intent(context, OverlayService::class.java).apply {
-                    action = OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP
-                    putExtra(OverlayService.EXTRA_UP_X, -1f)
-                    putExtra(OverlayService.EXTRA_UP_Y, -1f)
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                    if (isDragging) return false
+                    cancelDragDelay()
+                    sendOverlayServiceSimpleAction(OverlayService.ACTION_STOP_TRACKING)
+                    val intent = Intent(context, OverlayService::class.java).apply {
+                        action = OverlayService.ACTION_HIDE_DROP_ZONE_AND_CHECK_DROP
+                        putExtra(OverlayService.EXTRA_UP_X, -1f)
+                        putExtra(OverlayService.EXTRA_UP_Y, -1f)
+                    }
+                    context.startService(intent)
+                    return true
                 }
-                context.startService(intent)
-                return true
-            }
 
-            override fun onLongPress(e: MotionEvent) {
-                if (isDragging) return
-                cancelDragDelay()
+                override fun onLongPress(e: MotionEvent) {
+                    if (isDragging) return
+                    cancelDragDelay()
 
-                sendOverlayServiceSimpleAction(OverlayService.ACTION_SWITCH_TO_ICON)
-                mainHandler.postDelayed({
-                    sendOverlayServiceSimpleAction(OverlayService.ACTION_SHOW_QUICK_MENU)
-                }, 60L)
+                    // mantém o comportamento antigo: passa para o ícone + quick menu
+                    sendOverlayServiceSimpleAction(OverlayService.ACTION_SWITCH_TO_ICON)
+                    mainHandler.postDelayed({
+                        sendOverlayServiceSimpleAction(OverlayService.ACTION_SHOW_QUICK_MENU)
+                    }, 60L)
 
-                try { performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) } catch (_: Throwable) {}
-            }
-        })
+                    try {
+                        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    } catch (_: Throwable) {
+                    }
+                }
+            })
 
         setOnTouchListener { _, event ->
             gestureDetector.onTouchEvent(event)
@@ -260,12 +291,12 @@ class TrackingOverlayView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         if (pulseEnabled) startPulse()
-        cancelMapHold()
+        // por segurança, assumimos que o mapa está fechado quando o overlay entra
+        isMapVisible = false
     }
 
     override fun onDetachedFromWindow() {
         stopPulse()
-        cancelMapHold()
         super.onDetachedFromWindow()
     }
 
@@ -303,57 +334,6 @@ class TrackingOverlayView(
         dragReady = false
     }
 
-    private fun scheduleMapIfNeeded() {
-        cancelMapHold()
-        if (pageIndex == PAGE_MAP) {
-            mapAutoPosted = true
-            mainHandler.postDelayed(mapAutoRunnable, MAP_HOLD_MS)
-        }
-    }
-
-    private fun cancelMapHold() {
-        if (mapAutoPosted) {
-            mainHandler.removeCallbacks(mapAutoRunnable)
-            mapAutoPosted = false
-        }
-    }
-
-    private fun openMapFromTracking() {
-        // Envia primeiro UPDATE_MAP com as moradas atuais (se existirem)
-        val offer = offerForMap
-        val pickupAddr = offer?.moradaRecolha?.takeIf { it.isNotBlank() }
-        val destAddr   = offer?.moradaDestino?.takeIf { it.isNotBlank() }
-
-        runCatching {
-            val upd = Intent(MapPreviewActivity.ACTION_UPDATE_MAP).apply {
-                setPackage(context.packageName)
-                pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
-                destAddr?.let { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS, it) }
-            }
-            context.sendBroadcast(upd)
-        }
-
-        // Garante activity do mapa visível (singleTop para não duplicar)
-        runCatching {
-            val open = Intent(context, MapPreviewActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
-                destAddr?.let { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS, it) }
-            }
-            context.startActivity(open)
-        }
-
-        // Pede SHOW com auto-hide (a activity gere o fade/fecho)
-        runCatching {
-            val show = Intent(MapPreviewActivity.ACTION_SEMAFORO_SHOW_MAP).apply {
-                setPackage(context.packageName)
-                putExtra(MapPreviewActivity.EXTRA_AUTO_HIDE_MS, 12_000L)
-                putExtra(MapPreviewActivity.EXTRA_FADE_MS, 400L)
-            }
-            context.sendBroadcast(show)
-        }
-    }
-
     private fun recalcTextMetrics() {
         mainTextHeight = mainPaint.descent() - mainPaint.ascent()
         legendTextHeight = legendPaint.descent() - legendPaint.ascent()
@@ -361,7 +341,10 @@ class TrackingOverlayView(
 
     private fun sendOverlayServiceSimpleAction(action: String) {
         val intent = Intent(context, OverlayService::class.java).apply { this.action = action }
-        try { context.startService(intent) } catch (_: Exception) {}
+        try {
+            context.startService(intent)
+        } catch (_: Exception) {
+        }
     }
 
     // ======== APIs ========
@@ -390,9 +373,20 @@ class TrackingOverlayView(
         currentHourRating = hR
         elapsedTimeSeconds = elSec
         invalidate()
+
+        // Envia €/h atual para o cabeçalho do mapa (quando o header está visível)
+        val currStr = cVph?.let { dfHour1.format(it) } ?: "--.-"
+        val intent = Intent(MapPreviewActivity.ACTION_UPDATE_CARD_METRICS).apply {
+            setPackage(context.packageName)
+            putExtra(MapPreviewActivity.EXTRA_METRIC_EUR_PER_HOUR_CURRENT, currStr)
+        }
+        try {
+            context.sendBroadcast(intent)
+        } catch (_: Exception) {
+        }
     }
 
-    // ---- NOVO: injetar a OfferData atual para o mapa conhecer recolha/destino
+    // OfferData atual para o mapa conhecer recolha/destino
     fun setOfferForMap(offer: OfferData?) {
         offerForMap = offer
     }
@@ -419,7 +413,10 @@ class TrackingOverlayView(
         layoutParams.x = x
         layoutParams.y = y
         mainHandler.post {
-            try { if (isAttachedToWindow) windowManager.updateViewLayout(this, layoutParams) } catch (_: Exception) {}
+            try {
+                if (isAttachedToWindow) windowManager.updateViewLayout(this, layoutParams)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -462,8 +459,10 @@ class TrackingOverlayView(
 
         // pulso suave
         if (pulseEnabled) {
-            val alpha = (PULSE_MIN_ALPHA + (PULSE_MAX_ALPHA - PULSE_MIN_ALPHA) * pulseProgress).toInt()
-            val pulseStroke = borderWidthPx * (1f + PULSE_EXTRA_WIDTH_FACTOR * pulseProgress)
+            val alpha =
+                (PULSE_MIN_ALPHA + (PULSE_MAX_ALPHA - PULSE_MIN_ALPHA) * pulseProgress).toInt()
+            val pulseStroke =
+                borderWidthPx * (1f + PULSE_EXTRA_WIDTH_FACTOR * pulseProgress)
             haloPulsePaint.color = withAlpha(borderColor, alpha)
             haloPulsePaint.strokeWidth = pulseStroke
 
@@ -471,61 +470,16 @@ class TrackingOverlayView(
             canvas.drawCircle(cx, cy, max(0f, radiusPulse), haloPulsePaint)
         }
 
-        when (pageIndex) {
-            0 -> {
-                val topLegend = "inicial"
-                val bottomLegend = "decorrido"
-                val top = initialTotalDurationMinutes?.let { formatHM(it) } ?: "--h--"
-                val bottom = formatElapsedHM(elapsedTimeSeconds)
-                drawTwoLinesWithLegends(
-                    canvas, cx, cy, radiusBase,
-                    topLegend, top, TEXT_COLOR_MAIN,
-                    bottomLegend, bottom, TEXT_COLOR_MAIN
-                )
-            }
-            1 -> {
-                val topLegend = "€/h prev."
-                val bottomLegend = "€/h atual"
-
-                val prev = calcEuroPerHourPlanned().let { if (it != "--.-") "€ $it" else "€ --.-" }
-                val currVal = currentValuePerHour?.let { "€ " + dfHour1.format(it) } ?: "€ --.-"
-
-                val baseHourRating = initialHourRating ?: borderToIndividual(initialBorderRating)
-                val prevColor = ratingToColor(baseHourRating)
-                val currColor = if (currentHourRating != IndividualRating.UNKNOWN)
-                    ratingToColor(currentHourRating) else prevColor
-
-                drawTwoLinesWithLegends(
-                    canvas, cx, cy, radiusBase,
-                    topLegend, prev, prevColor,
-                    bottomLegend, currVal, currColor
-                )
-            }
-            2 -> {
-                val topLegend = "€/km"
-                val eurKm = initialValuePerKm?.let { "€ " + dfEurKm.format(it) } ?: "€ --.--"
-                val kmLegend = "km"
-                val kmShow = initialTotalDistance?.let { dfKm1.format(it) + " km" } ?: "--.- km"
-                drawTwoLinesWithLegends(
-                    canvas, cx, cy, radiusBase,
-                    topLegend, eurKm, ratingToColor(initialKmRating),
-                    kmLegend, kmShow, TEXT_COLOR_MAIN
-                )
-            }
-            3 -> {
-                val legend = "oferta"
-                val valStr = parseOfferValue()?.let { "€ " + dfVal.format(it) }
-                    ?: offerValueRaw?.let { "€ " + it.replace("€", "").trim() }
-                    ?: "€ --"
-                drawSingleLineWithLegend(canvas, cx, cy, radiusBase, legend, valStr)
-            }
-            4 -> {
-                // Página MAPA — rótulo informativo; a abertura é automática após MAP_HOLD_MS
-                val legend = "mapa"
-                val line = "abrir…"
-                drawSingleLineWithLegend(canvas, cx, cy, radiusBase, legend, line)
-            }
-        }
+        // Página única: tempo inicial / decorrido
+        val topLegend = "inicial"
+        val bottomLegend = "decorrido"
+        val top = initialTotalDurationMinutes?.let { formatHM(it) } ?: "--h--"
+        val bottom = formatElapsedHM(elapsedTimeSeconds)
+        drawTwoLinesWithLegends(
+            canvas, cx, cy, radiusBase,
+            topLegend, top, TEXT_COLOR_MAIN,
+            bottomLegend, bottom, TEXT_COLOR_MAIN
+        )
     }
 
     private fun applyClampedPosition(targetX: Int, targetY: Int) {
@@ -534,13 +488,20 @@ class TrackingOverlayView(
         val clampedX = max(minX, min(targetX, maxX))
 
         val minY = safeMarginPx
-        val maxY = ((screenH * TOP_BAND_RATIO) - measuredHeight - safeMarginPx).toInt()
+        val maxY =
+            ((screenH * TOP_BAND_RATIO) - measuredHeight - safeMarginPx).toInt()
         val clampedY = max(minY, min(targetY, maxY))
 
         layoutParams.x = clampedX
         layoutParams.y = clampedY
         mainHandler.post {
-            try { if (isAttachedToWindow) windowManager.updateViewLayout(this@TrackingOverlayView, layoutParams) } catch (_: Exception) {}
+            try {
+                if (isAttachedToWindow) windowManager.updateViewLayout(
+                    this@TrackingOverlayView,
+                    layoutParams
+                )
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -559,30 +520,32 @@ class TrackingOverlayView(
         val box = (radius - paddingPx) * 2f
 
         var mainSize = MAIN_TEXT_SP * resources.displayMetrics.scaledDensity
-        var legSize  = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
+        var legSize = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
 
         mainPaint.textSize = mainSize
         legendPaint.textSize = legSize
         recalcTextMetrics()
 
         fun widest(): Float {
-            val w1 = maxOf(mainPaint.measureText(lineTop),    legendPaint.measureText(legendTop))
+            val w1 = maxOf(mainPaint.measureText(lineTop), legendPaint.measureText(legendTop))
             val w2 = maxOf(mainPaint.measureText(lineBottom), legendPaint.measureText(legendBottom))
             return maxOf(w1, w2)
         }
+
         fun totalHeight(): Float {
             val gapLegend = paddingPx * 0.1f
-            val gapMain   = paddingPx * 0.18f
+            val gapMain = paddingPx * 0.18f
             val topBlock = legendTextHeight + gapLegend + mainTextHeight
-            val bottomBlock = if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
-            else legendTextHeight + gapLegend + mainTextHeight
+            val bottomBlock =
+                if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
+                else legendTextHeight + gapLegend + mainTextHeight
             return topBlock + (if (bottomBlock == 0f) 0f else gapMain + bottomBlock)
         }
 
         var attempts = 0
         while ((widest() > box || totalHeight() > box) && attempts < 28) {
             mainSize *= 0.92f
-            legSize  *= 0.92f
+            legSize *= 0.92f
             mainPaint.textSize = mainSize
             legendPaint.textSize = legSize
             recalcTextMetrics()
@@ -592,17 +555,19 @@ class TrackingOverlayView(
         legendPaint.textAlign = Paint.Align.CENTER
 
         val gapLegend = paddingPx * 0.1f
-        val gapMain   = paddingPx * 0.18f
+        val gapMain = paddingPx * 0.18f
 
         val topBlock = legendTextHeight + gapLegend + mainTextHeight
-        val bottomBlock = if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
-        else legendTextHeight + gapLegend + mainTextHeight
+        val bottomBlock =
+            if (lineBottom.isBlank() && legendBottom.isBlank()) 0f
+            else legendTextHeight + gapLegend + mainTextHeight
         val total = topBlock + (if (bottomBlock == 0f) 0f else gapMain + bottomBlock)
 
         var y = cy - total / 2f
 
         if (legendTop.isNotBlank()) {
-            val yLegTop = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
+            val yLegTop =
+                y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
             canvas.drawText(legendTop, cx, yLegTop, legendPaint)
             y += legendTextHeight + gapLegend
         }
@@ -611,14 +576,16 @@ class TrackingOverlayView(
             textAlign = Paint.Align.CENTER
             color = colorTop
         }
-        val yTop = y - (paintTop.descent() + paintTop.ascent()) / 2f + mainTextHeight / 2f
+        val yTop =
+            y - (paintTop.descent() + paintTop.ascent()) / 2f + mainTextHeight / 2f
         canvas.drawText(lineTop, cx, yTop, paintTop)
         y += mainTextHeight
 
         if (!(lineBottom.isBlank() && legendBottom.isBlank())) {
             y += gapMain
             if (legendBottom.isNotBlank()) {
-                val yLegBottom = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
+                val yLegBottom =
+                    y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
                 canvas.drawText(legendBottom, cx, yLegBottom, legendPaint)
                 y += legendTextHeight + gapLegend
             }
@@ -627,54 +594,10 @@ class TrackingOverlayView(
                 textAlign = Paint.Align.CENTER
                 color = colorBottom
             }
-            val yBottom = y - (paintBottom.descent() + paintBottom.ascent()) / 2f + mainTextHeight / 2f
+            val yBottom =
+                y - (paintBottom.descent() + paintBottom.ascent()) / 2f + mainTextHeight / 2f
             canvas.drawText(lineBottom, cx, yBottom, paintBottom)
         }
-    }
-
-    private fun drawSingleLineWithLegend(
-        canvas: Canvas,
-        cx: Float,
-        cy: Float,
-        radius: Float,
-        legend: String,
-        line: String
-    ) {
-        var mainSize = MAIN_TEXT_SP * resources.displayMetrics.scaledDensity
-        var legSize = LEGEND_TEXT_SP * resources.displayMetrics.scaledDensity
-
-        mainPaint.textSize = mainSize
-        legendPaint.textSize = legSize
-        recalcTextMetrics()
-
-        val box = (radius - paddingPx) * 2f
-        fun widest() = maxOf(mainPaint.measureText(line), legendPaint.measureText(legend))
-        fun totalHeight(): Float {
-            val gapLegend = paddingPx * 0.12f
-            return legendTextHeight + gapLegend + mainTextHeight
-        }
-        var attempts = 0
-        while ((widest() > box || totalHeight() > box) && attempts < 28) {
-            mainSize *= 0.92f
-            legSize *= 0.92f
-            mainPaint.textSize = mainSize
-            legendPaint.textSize = legSize
-            recalcTextMetrics(); attempts++
-        }
-
-        legendPaint.textAlign = Paint.Align.CENTER
-        mainPaint.textAlign = Paint.Align.CENTER
-
-        val gapLegend = paddingPx * 0.12f
-        val total = legendTextHeight + gapLegend + mainTextHeight
-        var y = cy - total / 2f
-
-        val yLeg = y - (legendPaint.descent() + legendPaint.ascent()) / 2f + legendTextHeight / 2f
-        canvas.drawText(legend, cx, yLeg, legendPaint)
-        y += legendTextHeight + gapLegend
-
-        val yVal = y - (mainPaint.descent() + mainPaint.ascent()) / 2f + mainTextHeight / 2f
-        canvas.drawText(line, cx, yVal, mainPaint)
     }
 
     // ---------- util cores ----------
@@ -732,5 +655,100 @@ class TrackingOverlayView(
         val hours = durMin.toDouble() / 60.0
         if (hours <= 0.0) return "--.-"
         return dfHour1.format(valNum / hours)
+    }
+
+    // ----------- toggle do mapa a partir do tracking -----------
+    private fun openMapFromTracking() {
+        val offer = offerForMap
+        val pickupAddr = offer?.moradaRecolha?.takeIf { !it.isNullOrBlank() }
+        val destAddr = offer?.moradaDestino?.takeIf { !it.isNullOrBlank() }
+
+        // preparar textos do card
+        val offerVal = parseOfferValue()?.let { "€ " + dfVal.format(it) }
+            ?: offerValueRaw?.let { raw ->
+                val t = raw.trim()
+                if (t.startsWith("€")) t else "€ $t"
+            } ?: "€ —"
+
+        val eurKm = initialValuePerKm?.let { "€ " + dfEurKm.format(it) } ?: "—"
+
+        val totalKmNum = initialTotalDistance
+            ?: offer?.calculateTotalDistance()
+        val totalKm = totalKmNum?.let { dfKm1.format(it) } ?: "—"
+
+        val plannedHour = calcEuroPerHourPlanned().let { s -> if (s != "--.-") "€ $s" else "—" }
+
+        fun legSuffix(distRaw: String?, durRaw: String?): String? {
+            val d = distRaw.toDoubleOrNullWithCorrection()
+            val m = durRaw.toIntOrNullWithCorrection()
+            if (d == null && m == null) return null
+            val parts = mutableListOf<String>()
+            d?.let { parts += dfKm1.format(it) + " km" }
+            m?.let { parts += "$m min" }
+            return parts.joinToString(" · ")
+        }
+
+        val pickupSuffix = legSuffix(offer?.pickupDistance, offer?.pickupDuration)
+        val destSuffix   = legSuffix(offer?.tripDistance, offer?.tripDuration)
+
+        // 1) UPDATE_MAP (broadcast) para atualizar markers/rotas
+        runCatching {
+            val upd = Intent(MapPreviewActivity.ACTION_UPDATE_MAP).apply {
+                setPackage(context.packageName)
+                pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
+                destAddr?.let { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS, it) }
+
+                putExtra(MapPreviewActivity.EXTRA_CARD_OFFER_VALUE, offerVal)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_KM, eurKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_TOTAL_KM, totalKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_HOUR_PLANNED, plannedHour)
+
+                pickupSuffix?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_SUFFIX_FROM_CARD, it) }
+                destSuffix?.let   { putExtra(MapPreviewActivity.EXTRA_DEST_SUFFIX_FROM_CARD, it) }
+            }
+            context.sendBroadcast(upd)
+        }
+
+        // 2) Abrir (ou trazer à frente) o MapPreviewActivity, fullscreen com header
+        runCatching {
+            val open = Intent(context, MapPreviewActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MapPreviewActivity.EXTRA_FULLSCREEN, true)
+                putExtra(MapPreviewActivity.EXTRA_SHOW_HEADER, true)
+
+                pickupAddr?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_ADDRESS, it) }
+                destAddr?.let { putExtra(MapPreviewActivity.EXTRA_DEST_ADDRESS, it) }
+
+                putExtra(MapPreviewActivity.EXTRA_CARD_OFFER_VALUE, offerVal)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_KM, eurKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_TOTAL_KM, totalKm)
+                putExtra(MapPreviewActivity.EXTRA_CARD_EUR_PER_HOUR_PLANNED, plannedHour)
+
+                pickupSuffix?.let { putExtra(MapPreviewActivity.EXTRA_PICKUP_SUFFIX_FROM_CARD, it) }
+                destSuffix?.let   { putExtra(MapPreviewActivity.EXTRA_DEST_SUFFIX_FROM_CARD, it) }
+            }
+            context.startActivity(open)
+        }
+
+        // 3) Pedir SHOW ao MapPreviewActivity (fica visível até mandarmos esconder)
+        runCatching {
+            val show = Intent(MapPreviewActivity.ACTION_SEMAFORO_SHOW_MAP).apply {
+                setPackage(context.packageName)
+                putExtra(MapPreviewActivity.EXTRA_AUTO_HIDE_MS, 0L) // 0 = não auto-hide
+                putExtra(MapPreviewActivity.EXTRA_FADE_MS, 250L)
+                putExtra(MapPreviewActivity.EXTRA_FULLSCREEN, true)
+            }
+            context.sendBroadcast(show)
+        }
+    }
+
+    private fun hideMapFromTracking() {
+        runCatching {
+            val hide = Intent(MapPreviewActivity.ACTION_SEMAFORO_HIDE_MAP).apply {
+                setPackage(context.packageName)
+                putExtra(MapPreviewActivity.EXTRA_FADE_MS, 250L)
+            }
+            context.sendBroadcast(hide)
+        }
     }
 }

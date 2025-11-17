@@ -1,46 +1,53 @@
 package com.example.smartdriver.overlay.widgets
 
+import android.app.Activity
 import android.content.Context
-import android.graphics.Color
-import android.graphics.Typeface
-import android.preference.PreferenceManager
+import android.graphics.*
+import android.graphics.drawable.BitmapDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
-import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
-
-// Ajusta o import se a tua classe estiver noutro package
+import androidx.core.view.doOnLayout
+import com.example.smartdriver.R
+import com.example.smartdriver.zones.ZoneRepository
 import com.example.smartdriver.zones.ZonesRenderOverlay
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.MapView
+import com.google.android.gms.maps.OnMapReadyCallback
+import com.google.android.gms.maps.model.*
 
-class MiniMapOverlay(context: Context) : FrameLayout(context) {
+class MiniMapOverlay(context: Context) : FrameLayout(context), OnMapReadyCallback {
 
     data class LatLngD(val lat: Double, val lon: Double)
 
-    private val map: MapView
+    private val mapView: MapView
+    private var googleMap: GoogleMap? = null
+    private var renderer: ZonesRenderOverlay? = null
+
     private val closeBtn: TextView
-    private var polyline: Polyline? = null
+
+    private var routePolyline: Polyline? = null
+    private var originMarker: Marker? = null
+    private var destMarker: Marker? = null
+
+    // Caso setRoute seja chamado antes do mapa estar pronto
+    private var pendingRoute: List<LatLng>? = null
 
     init {
         setBackgroundColor(0xEE000000.toInt()) // fundo semitransparente
 
-        // OSMDroid init
-        Configuration.getInstance().load(context, PreferenceManager.getDefaultSharedPreferences(context))
-        map = MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
-            setMultiTouchControls(true)
-            isTilesScaledToDpi = true
-            minZoomLevel = 3.0
-            maxZoomLevel = 20.0
-        }
-        addView(map, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
-            gravity = Gravity.CENTER
-        })
+        // MapView do Google Maps (sem fragment)
+        mapView = MapView(context)
+        mapView.onCreate(null)
+        addView(
+            mapView,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                gravity = Gravity.CENTER
+            }
+        )
+        mapView.getMapAsync(this)
 
         closeBtn = TextView(context).apply {
             text = "Fechar mapa"
@@ -51,75 +58,143 @@ class MiniMapOverlay(context: Context) : FrameLayout(context) {
             setBackgroundColor(0xAA000000.toInt())
             setOnClickListener { onCloseRequested?.invoke() }
         }
-        addView(closeBtn, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.TOP or Gravity.END
-            topMargin = dp(12)
-            rightMargin = dp(12)
-        })
+        addView(
+            closeBtn,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.TOP or Gravity.END
+                topMargin = dp(12)
+                rightMargin = dp(12)
+            }
+        )
+    }
+
+    // -------- Lifecycle opcional (chama do host se quiseres) --------
+    fun onResume() = mapView.onResume()
+    fun onPause() = mapView.onPause()
+    fun onDestroy() {
+        renderer?.clear()
+        renderer = null
+        mapView.onDestroy()
     }
 
     private var onCloseRequested: (() -> Unit)? = null
     fun setOnCloseRequested(cb: (() -> Unit)?) { onCloseRequested = cb }
 
+    // -------- API pública --------
     fun setRoute(points: List<LatLngD>) {
-        polyline?.let { map.overlays.remove(it) }
-        if (points.isEmpty()) return
+        val gm = googleMap
+        val latLngs = points.map { LatLng(it.lat, it.lon) }
 
-        val geo = points.map { GeoPoint(it.lat, it.lon) }
-
-        polyline = Polyline().apply {
-            outlinePaint.color = Color.WHITE
-            outlinePaint.strokeWidth = dp(3).toFloat()
-            setPoints(geo)
+        if (gm == null) {
+            pendingRoute = latLngs
+            return
         }
-        map.overlays.add(polyline)
-
-        addMarker(geo.first(), Color.parseColor("#2E7D32")) // origem (verde)
-        addMarker(geo.last(), Color.parseColor("#C62828"))  // destino (vermelho)
-        map.invalidate()
-        zoomToRoute()
+        drawRouteOnMap(gm, latLngs)
     }
 
     fun zoomToRoute(paddingDp: Int = 24) {
-        val pl = polyline ?: return
-        val bbox = pl.bounds ?: return
-        val padding = dp(paddingDp)
-        map.post {
-            map.controller.setCenter(bbox.centerWithDateLine)
-            map.zoomToBoundingBox(bbox, true, padding)
+        val gm = googleMap ?: return
+        val poly = routePolyline ?: return
+        val pts = poly.points
+        if (pts.isNullOrEmpty()) return
+
+        val builder = LatLngBounds.Builder()
+        pts.forEach { builder.include(it) }
+        val bounds = builder.build()
+        val paddingPx = dp(paddingDp)
+        // garantir que já tem tamanho para calcular bounds
+        doOnLayout {
+            gm.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, paddingPx))
         }
     }
 
+    /** Desenha zonas (se existir ZoneRepository). */
     fun tryEnableZonesOverlay(enable: Boolean) {
         if (!enable) return
+        val gm = googleMap ?: return
+        val act = (context as? Activity) ?: return  // precisa de Activity para estilos
+        if (renderer == null) {
+            renderer = ZonesRenderOverlay(act, gm).also {
+                it.renderAll(ZoneRepository.list())
+            }
+        } else {
+            renderer?.renderAll(ZoneRepository.list())
+        }
+    }
+
+    // -------- OnMapReady --------
+    override fun onMapReady(map: GoogleMap) {
+        googleMap = map
+
+        // Estilo claro tipo Uber (se tiveres res/raw/sd_light_style.json)
         try {
-            // ✅ CORRIGIDO: passar ctx
-            val zones = ZonesRenderOverlay(context.applicationContext)
-            map.overlays.add(zones)
-            map.invalidate()
-        } catch (_: Throwable) {
-            // Se o módulo de zonas não estiver presente neste build, ignorar silenciosamente.
+            map.setMapStyle(MapStyleOptions.loadRawResourceStyle(context, R.raw.sd_light_style))
+        } catch (_: Exception) { /* segue default */ }
+
+        map.uiSettings.isMapToolbarEnabled = false
+        map.uiSettings.isZoomControlsEnabled = false
+        map.uiSettings.isCompassEnabled = true
+        map.uiSettings.isMyLocationButtonEnabled = false
+
+        // Se já havia rota pendente, desenha agora
+        pendingRoute?.let { latLngs ->
+            drawRouteOnMap(map, latLngs)
+            pendingRoute = null
         }
     }
 
-    private fun addMarker(point: GeoPoint, color: Int) {
-        val m = Marker(map)
-        m.position = point
-        m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-        m.icon = MarkerIconFactory.circle(color)
-        map.overlays.add(m)
-    }
+    // -------- Internos --------
+    private fun drawRouteOnMap(map: GoogleMap, latLngs: List<LatLng>) {
+        // limpar anteriores
+        routePolyline?.remove(); routePolyline = null
+        originMarker?.remove(); originMarker = null
+        destMarker?.remove(); destMarker = null
 
-    private fun dp(v: Int): Int =
-        (resources.displayMetrics.density * v).toInt()
+        if (latLngs.isEmpty()) return
 
-    object MarkerIconFactory {
-        fun circle(color: Int): android.graphics.drawable.Drawable {
-            val d = android.graphics.drawable.ShapeDrawable(android.graphics.drawable.shapes.OvalShape())
-            d.intrinsicWidth = 24
-            d.intrinsicHeight = 24
-            d.paint.color = color
-            return d
+        routePolyline = map.addPolyline(
+            PolylineOptions()
+                .addAll(latLngs)
+                .width(dp(3).toFloat())
+                .color(Color.WHITE)
+        )
+
+        originMarker = map.addMarker(
+            MarkerOptions()
+                .position(latLngs.first())
+                .icon(circleBitmapDescriptor("#2E7D32"))
+                .anchor(0.5f, 1f)
+        )
+        destMarker = map.addMarker(
+            MarkerOptions()
+                .position(latLngs.last())
+                .icon(circleBitmapDescriptor("#C62828"))
+                .anchor(0.5f, 1f)
+        )
+
+        // ajustar câmara
+        val builder = LatLngBounds.Builder()
+        latLngs.forEach { builder.include(it) }
+        val bounds = builder.build()
+        doOnLayout {
+            map.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, dp(24)))
         }
     }
+
+    private fun circleBitmapDescriptor(hex: String): BitmapDescriptor {
+        val color = Color.parseColor(hex)
+        val size = dp(20)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val pFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; style = Paint.Style.FILL }
+        val pStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat()
+        }
+        val r = size / 2f
+        c.drawCircle(r, r, r - dp(3).toFloat(), pFill)
+        c.drawCircle(r, r, r - dp(3).toFloat(), pStroke)
+        return BitmapDescriptorFactory.fromBitmap(bmp)
+    }
+
+    private fun dp(v: Int): Int = (resources.displayMetrics.density * v).toInt()
 }

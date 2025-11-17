@@ -17,18 +17,18 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.smartdriver.R
 import com.example.smartdriver.zones.*
-import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.OnMapReadyCallback
+import com.google.android.gms.maps.SupportMapFragment
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.MapStyleOptions
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
 import kotlin.math.max
 
-class MapEditorActivity : AppCompatActivity() {
+class MapEditorActivity : AppCompatActivity(), OnMapReadyCallback {
 
-    private var mapView: MapView? = null
-    private lateinit var zonesRender: ZonesRenderOverlay
-    private lateinit var polygonEditor: PolygonEditorOverlay
-
+    private var gmap: GoogleMap? = null
     private lateinit var drawer: DrawerLayout
     private lateinit var contentRoot: LinearLayout
     private lateinit var mapContainer: FrameLayout
@@ -36,12 +36,15 @@ class MapEditorActivity : AppCompatActivity() {
     private lateinit var zonesList: RecyclerView
     private lateinit var zonesAdapter: ZonesAdapter
 
+    private lateinit var zonesRender: ZonesRenderOverlay
+    private var polygonEditor: PolygonEditorOverlay? = null
+
     private var zoneCounter = 0
     private var editingZone: Zone? = null
 
     private val repoListener = object : ZoneRepository.SaveListener {
-        override fun onDirty() {}
-        override fun onSaved(success: Boolean) {}
+        override fun onDirty() { redrawZones() }
+        override fun onSaved(success: Boolean) { redrawZones() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -80,6 +83,7 @@ class MapEditorActivity : AppCompatActivity() {
         topTitleBar.addView(titleView)
 
         mapContainer = FrameLayout(this).apply {
+            id = View.generateViewId()
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             )
@@ -105,15 +109,13 @@ class MapEditorActivity : AppCompatActivity() {
             text = "Zonas"; setOnClickListener {
             if (drawer.isDrawerOpen(GravityCompat.START)) drawer.closeDrawer(GravityCompat.START)
             else drawer.openDrawer(GravityCompat.START)
-        }
-        }
+        } }
         val btnSave = Button(this).apply {
             text = "Guardar"; setOnClickListener {
             try { ZoneRepository.save() } catch (_: Throwable) {}
             Toast.makeText(this@MapEditorActivity, "Zonas guardadas", Toast.LENGTH_SHORT).show()
             finish()
-        }
-        }
+        } }
         val btnMore = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_more)
             background = null
@@ -142,77 +144,28 @@ class MapEditorActivity : AppCompatActivity() {
         setContentView(drawer)
 
         // Repo
-        ZoneRepository.init(applicationContext); ZoneRepository.addListener(repoListener)
+        ZoneRepository.init(applicationContext)
+        ZoneRepository.addListener(repoListener)
 
-        // OSMDroid config/cache
-        val ctx = applicationContext
-        val prefs = ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE)
-        val cfg = Configuration.getInstance()
-        cfg.load(ctx, prefs); cfg.userAgentValue = packageName
-        val basePath = java.io.File(ctx.cacheDir, "osmdroid").apply { mkdirs() }
-        val tilePath = java.io.File(basePath, "tiles").apply { mkdirs() }
-        cfg.osmdroidBasePath = basePath; cfg.osmdroidTileCache = tilePath
+        // MapFragment
+        val frag = SupportMapFragment.newInstance()
+        supportFragmentManager.beginTransaction()
+            .replace(mapContainer.id, frag)
+            .commitNow()
+        frag.getMapAsync(this)
 
-        // MapView
-        val mv = MapView(this)
-        mv.setTileSource(TileSourceFactory.MAPNIK)
-        mv.setMultiTouchControls(true)
-        try { mv.setMinZoomLevel(2.0) } catch (_: Throwable) {}
-        try { mv.setMaxZoomLevel(21.0) } catch (_: Throwable) {}
-        // 👇 aplicar estilo nítido a cores
-        MapStyle.applyHighContrastColorStyle(mv)
-
-        mapContainer.addView(mv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        mapView = mv
-
-        // Overlays
-        zonesRender = ZonesRenderOverlay(this).apply {
-            onRequestEdit = { z -> enterEditMode(z) }
-        }
-        mv.overlays.add(zonesRender)
-
-        polygonEditor = PolygonEditorOverlay(this).apply {
-            onChange = { /* autosave já trata sujidade */ }
-            onFinalize = { pts, type ->
-                val editing = editingZone
-                if (editing != null) {
-                    editing.points = pts.toMutableList()
-                    editing.active = true
-                    editing.touch()
-                    editing.style = editing.style ?: ZoneDefaults.styleFor(editing.type)
-                    ZoneRepository.update(editing)
-                    editingZone = null
-                    Toast.makeText(this@MapEditorActivity, "Zona atualizada.", Toast.LENGTH_SHORT).show()
-                } else {
-                    zoneCounter += 1
-                    val zone = Zone(
-                        name = "Zona $zoneCounter",
-                        type = type,
-                        points = pts.toMutableList(),
-                        style = ZoneDefaults.styleFor(type)
-                    )
-                    ZoneRepository.add(zone)
-                    Toast.makeText(this@MapEditorActivity, "Zona adicionada (#$zoneCounter).", Toast.LENGTH_SHORT).show()
-                }
-                refreshZonesUi()
-                mapView?.invalidate()
-            }
-            // <<< Long-press: pedir edição da zona por baixo do dedo
-            onLongPressRequestEdit = { gp ->
-                val z = pickZoneAt(gp.latitude, gp.longitude)
-                if (z != null) enterEditMode(z)
-                else Toast.makeText(this@MapEditorActivity, "Sem zona por baixo do dedo.", Toast.LENGTH_SHORT).show()
-            }
-        }
-        mv.overlays.add(polygonEditor)
-
-        // Adapter + drag
+        // Lista/adapter
         zonesAdapter = ZonesAdapter(
             onToggleActive = { z, active ->
-                z.active = active; z.touch(); ZoneRepository.update(z); mapView?.invalidate()
+                z.active = active; z.touch(); ZoneRepository.update(z); redrawZones()
             },
             onDelete = { z ->
-                confirm("Apagar \"${z.name}\"?") { ZoneRepository.delete(z.id); refreshZonesUi(); mapView?.invalidate() }
+                confirm("Apagar \"${z.name}\"?") {
+                    ZoneRepository.delete(z.id)
+                    polygonEditor?.clear()
+                    refreshZonesUi()
+                    redrawZones()
+                }
             },
             onRename = { z ->
                 prompt("Renomear zona", z.name) { newName: String ->
@@ -227,39 +180,99 @@ class MapEditorActivity : AppCompatActivity() {
                 }
                 z.style = ZoneDefaults.styleFor(z.type)
                 z.touch(); ZoneRepository.update(z)
-                mapView?.invalidate(); refreshZonesUi()
+                redrawZones(); refreshZonesUi()
             },
             onEdit = { z -> enterEditMode(z) }
         )
         zonesList.adapter = zonesAdapter
         attachDragToRecycler()
 
-        val lat = savedInstanceState?.getDouble(STATE_CENTER_LAT) ?: 38.708
-        val lon = savedInstanceState?.getDouble(STATE_CENTER_LON) ?: -9.136
-        val zoom = savedInstanceState?.getDouble(STATE_ZOOM) ?: 14.5
-        mv.controller.setZoom(zoom); mv.controller.setCenter(GeoPoint(lat, lon))
-
         refreshZonesUi()
     }
 
-    // ---------- Overflow (⋮) ----------
+    override fun onMapReady(map: GoogleMap) {
+        gmap = map
+        try { gmap!!.setMapStyle(MapStyleOptions.loadRawResourceStyle(this, R.raw.sd_light_style)) } catch (_: Exception) {}
+
+        gmap!!.uiSettings.isMapToolbarEnabled = false
+        gmap!!.uiSettings.isZoomControlsEnabled = false
+        gmap!!.uiSettings.isCompassEnabled = true
+        gmap!!.uiSettings.isMyLocationButtonEnabled = false
+        gmap!!.uiSettings.setAllGesturesEnabled(true)
+
+        gmap!!.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(38.708, -9.136), 14.5f))
+
+        // Render + Editor
+        zonesRender = ZonesRenderOverlay(this, gmap!!)
+        polygonEditor = PolygonEditorOverlay(this, gmap!!, mapContainer).apply {
+            // callback de alteração (opcional)
+            onChange = { /* podes mostrar instrução no UI, se quiseres */ }
+
+            // ⛳️ FINALIZAR: cria OU atualiza
+            onFinalize = { ptsGeo, type ->
+                val editing = editingZone
+                if (editing != null) {
+                    editing.points = ptsGeo.toMutableList()
+                    editing.active = true
+                    editing.style = editing.style ?: ZoneDefaults.styleFor(editing.type)
+                    editing.touch()
+                    ZoneRepository.update(editing)
+                    editingZone = null
+                    Toast.makeText(this@MapEditorActivity, "Zona atualizada.", Toast.LENGTH_SHORT).show()
+                } else {
+                    zoneCounter += 1
+                    val zone = Zone(
+                        name = "Zona $zoneCounter",
+                        type = type,
+                        points = ptsGeo.toMutableList(),
+                        style = ZoneDefaults.styleFor(type)
+                    )
+                    ZoneRepository.add(zone)
+                    Toast.makeText(this@MapEditorActivity, "Zona adicionada (#$zoneCounter).", Toast.LENGTH_SHORT).show()
+                }
+                refreshZonesUi()
+                redrawZones()
+            }
+        }
+
+        // TAP → por pontos (já tratado dentro do editor)
+        gmap!!.setOnMapClickListener { latLng -> polygonEditor?.onMapTap(latLng) }
+
+        // LONG-PRESS → entrar em edição da zona sob o dedo
+        gmap!!.setOnMapLongClickListener { latLng ->
+            val z = pickZoneAt(latLng.latitude, latLng.longitude)
+            if (z != null) enterEditMode(z)
+            else Toast.makeText(this, "Sem zona por baixo do dedo.", Toast.LENGTH_SHORT).show()
+        }
+
+        // mantém overlay colado ao mapa
+        gmap!!.setOnCameraMoveListener { polygonEditor?.invalidateOverlay() }
+        gmap!!.setOnCameraIdleListener { polygonEditor?.invalidateOverlay() }
+
+        redrawZones()
+    }
+
+    // ---------- Overflow ----------
     private fun showOverflowMenu(anchor: View) {
         val pm = PopupMenu(this, anchor)
         pm.menu.add(0, ID_TEST_GEOFENCE, 1, "Testar geofencing (centro)")
         pm.menu.add(0, ID_UNDO, 2, "Undo")
         pm.menu.add(0, ID_REDO, 3, "Redo")
         pm.menu.add(0, ID_CLEAR, 4, "Limpar")
-        val nextLabel = if (polygonEditor.mode == PolygonEditorOverlay.Mode.PONTOS)
-            "Modo: Pontos → Desenho livre" else "Modo: Desenho livre → Pontos"
-        pm.menu.add(0, ID_TOGGLE_MODE, 5, nextLabel)
-        pm.menu.add(0, ID_STATUS, 6, "Estado/Ajuda")
+        pm.menu.add(0, ID_TOGGLE_MODE, 5,
+            if (polygonEditor?.mode == PolygonEditorOverlay.Mode.PONTOS)
+                "Modo: Pontos → Desenho livre" else "Modo: Desenho livre → Pontos"
+        )
+        pm.menu.add(0, ID_FINISH, 6, "Concluir polígono")
+        pm.menu.add(0, ID_STATUS, 7, "Estado/Ajuda")
         pm.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 ID_TEST_GEOFENCE -> { testGeofenceAtCenter(); true }
-                ID_UNDO -> { if (!polygonEditor.undo()) Toast.makeText(this, "Nada para desfazer", Toast.LENGTH_SHORT).show() else mapView?.invalidate(); true }
-                ID_REDO -> { if (!polygonEditor.redo()) Toast.makeText(this, "Nada para refazer", Toast.LENGTH_SHORT).show() else mapView?.invalidate(); true }
-                ID_CLEAR -> { polygonEditor.clear(); mapView?.invalidate(); Toast.makeText(this, "Editor limpo", Toast.LENGTH_SHORT).show(); true }
+                ID_UNDO -> { if (polygonEditor?.undo() != true) Toast.makeText(this, "Nada para desfazer", Toast.LENGTH_SHORT).show(); true }
+                ID_REDO -> { if (polygonEditor?.redo() != true) Toast.makeText(this, "Nada para refazer", Toast.LENGTH_SHORT).show(); true }
+                ID_CLEAR -> { polygonEditor?.clear(); Toast.makeText(this, "Editor limpo", Toast.LENGTH_SHORT).show(); true }
                 ID_TOGGLE_MODE -> { toggleEditorMode(); true }
+                ID_FINISH -> { polygonEditor?.finalizeIfPossible(); true }
                 ID_STATUS -> { showStatusDialog(); true }
                 else -> false
             }
@@ -268,18 +281,19 @@ class MapEditorActivity : AppCompatActivity() {
     }
 
     private fun toggleEditorMode() {
-        val newMode = if (polygonEditor.mode == PolygonEditorOverlay.Mode.PONTOS)
-            PolygonEditorOverlay.Mode.DESENHO_LIVRE else PolygonEditorOverlay.Mode.PONTOS
-        polygonEditor.mode = newMode
-        Toast.makeText(this, "Modo: ${if (newMode == PolygonEditorOverlay.Mode.PONTOS) "Pontos" else "Desenho livre"}", Toast.LENGTH_SHORT).show()
+        polygonEditor?.let { editor ->
+            editor.mode = if (editor.mode == PolygonEditorOverlay.Mode.PONTOS)
+                PolygonEditorOverlay.Mode.DESENHO_LIVRE else PolygonEditorOverlay.Mode.PONTOS
+            Toast.makeText(this,
+                "Modo: ${if (editor.mode == PolygonEditorOverlay.Mode.PONTOS) "Pontos" else "Desenho livre"}",
+                Toast.LENGTH_SHORT).show()
+        }
     }
 
-    // ---------- Long-press hit-test ----------
+    // ---------- Hit-test ----------
     private fun pickZoneAt(lat: Double, lon: Double): Zone? {
         val zones = ZoneRepository.list().filter { it.points.size >= 3 }
-        for (z in zones.asReversed()) { // último por cima
-            if (containsPoint(lat, lon, z.points)) return z
-        }
+        for (z in zones.asReversed()) if (containsPoint(lat, lon, z.points)) return z
         return null
     }
 
@@ -299,26 +313,29 @@ class MapEditorActivity : AppCompatActivity() {
         return inside
     }
 
-    // ---------- Helpers visuais ----------
+    // ---------- Status ----------
     private fun testGeofenceAtCenter() {
-        val gp = mapView?.mapCenter as? GeoPoint ?: return
-        val hit = ZoneRuntime.firstZoneMatch(gp.latitude, gp.longitude)
-        val msg = if (hit == null) "Centro: fora de zonas"
-        else "Centro: dentro de \"${hit.name}\" (${hit.type})"
+        val tgt = gmap?.cameraPosition?.target ?: return
+        val msg = ZoneRuntime.firstZoneMatch(tgt.latitude, tgt.longitude)?.let {
+            "Centro: dentro de \"${it.name}\" (${it.type})"
+        } ?: "Centro: fora de zonas"
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-        ZoneRuntime.updatePosition(gp.latitude, gp.longitude)
+        ZoneRuntime.updatePosition(tgt.latitude, tgt.longitude)
     }
 
     private fun showStatusDialog() {
-        val cur = ZoneRuntime.current()?.let { "Geofence: ${it.name} (${it.type})" } ?: "Geofence: fora"
+        val cur = gmap?.cameraPosition?.target
+        val z = cur?.let { ZoneRuntime.firstZoneMatch(it.latitude, it.longitude) }
+        val geofenceTxt = z?.let { "Geofence: ${it.name} (${it.type})" } ?: "Geofence: fora"
+        val editor = polygonEditor
         val text = buildString {
-            append(cur).append('\n')
+            append(geofenceTxt).append('\n')
             append("Zonas ativas: ")
                 .append(ZoneRepository.list().count { it.active })
                 .append(" / ").append(ZoneRepository.size()).append('\n')
-            append("• Modo atual: ").append(if (polygonEditor.mode == PolygonEditorOverlay.Mode.PONTOS) "Pontos" else "Desenho livre").append('\n')
-            append("• PONTOS: toque para adicionar, duplo toque para terminar, arraste os handles para ajustar.\n")
-            append("• DESENHO LIVRE: deslize o dedo para desenhar; ao levantar finaliza.\n")
+            append("• Modo atual: ").append(if (editor?.mode == PolygonEditorOverlay.Mode.PONTOS) "Pontos" else "Desenho livre").append('\n')
+            append("• PONTOS: tocar no mapa adiciona ponto; tocar no primeiro ponto (com 3+) conclui.\n")
+            append("• DESENHO LIVRE: arrastar desenha; ao levantar conclui.\n")
             append("• Long-press numa zona para editar.\n")
             append("• Botões: Zonas (drawer) | Guardar | ⋮ opções")
         }
@@ -329,6 +346,7 @@ class MapEditorActivity : AppCompatActivity() {
             .show()
     }
 
+    // ---------- Helpers ----------
     private fun confirm(msg: String, onYes: () -> Unit) {
         AlertDialog.Builder(this)
             .setMessage(msg)
@@ -338,9 +356,7 @@ class MapEditorActivity : AppCompatActivity() {
     }
 
     private fun prompt(title: String, current: String, onOk: (String) -> Unit) {
-        val input = EditText(this).apply {
-            setText(current); setSelection(current.length)
-        }
+        val input = EditText(this).apply { setText(current); setSelection(current.length) }
         AlertDialog.Builder(this)
             .setTitle(title)
             .setView(input)
@@ -375,56 +391,51 @@ class MapEditorActivity : AppCompatActivity() {
         val newList = zonesAdapter.current().toMutableList()
         newList.forEachIndexed { index, zone -> zone.priority = index }
         ZoneRepository.setAll(newList)
-        mapView?.invalidate()
+        redrawZones()
     }
 
     private fun enterEditMode(z: Zone) {
+        // desativar a zona enquanto editas
         z.active = false; ZoneRepository.update(z)
-        polygonEditor.setPolygon(z.points, z.type)
-        editingZone = z
-        Toast.makeText(this, "Editar: ${z.name} — ajusta handles e termina com duplo toque (Pontos) ou levantar o dedo (Desenho livre).", Toast.LENGTH_LONG).show()
-        mapView?.invalidate()
+
+        // cópia defensiva dos pontos
+        val safePts = z.points.map { GeoPoint(it.latitude, it.longitude) }
+        polygonEditor?.mode = PolygonEditorOverlay.Mode.PONTOS
+        polygonEditor?.setPolygon(safePts, z.type)
+
+        editingZone = z.copy(points = safePts.toMutableList())
+        Toast.makeText(this, "Editar: ${z.name} — arrasta vértices; toca no 1.º ponto para concluir.", Toast.LENGTH_LONG).show()
         refreshZonesUi()
         drawer.closeDrawer(GravityCompat.START)
     }
 
     private fun refreshZonesUi() { zonesAdapter.submit(ZoneRepository.list()) }
+    private fun redrawZones() { if (this::zonesRender.isInitialized && gmap != null) zonesRender.renderAll(ZoneRepository.list()) }
 
-    override fun onResume() { super.onResume(); mapView?.onResume() }
     override fun onPause() {
         super.onPause()
         try { if (ZoneRepository.hasPendingWrites()) ZoneRepository.save() } catch (_: Throwable) {}
-        mapView?.onPause()
     }
-    override fun onDestroy() { super.onDestroy(); ZoneRepository.removeListener(repoListener) }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        val p = mapView?.mapCenter as? GeoPoint
-        if (p != null) {
-            outState.putDouble(STATE_CENTER_LAT, p.latitude)
-            outState.putDouble(STATE_CENTER_LON, p.longitude)
-        }
-        mapView?.zoomLevelDouble?.let { outState.putDouble(STATE_ZOOM, it) }
+    override fun onDestroy() {
+        super.onDestroy()
+        ZoneRepository.removeListener(repoListener)
+        if (this::zonesRender.isInitialized) zonesRender.clear()
+        polygonEditor?.dispose()
     }
 
     private fun dp(v: Int) = (resources.displayMetrics.density * v).toInt()
 
     companion object {
-        private const val STATE_CENTER_LAT = "state_center_lat"
-        private const val STATE_CENTER_LON = "state_center_lon"
-        private const val STATE_ZOOM = "state_zoom"
-
         private const val ID_TEST_GEOFENCE = 201
         private const val ID_UNDO = 202
         private const val ID_REDO = 203
         private const val ID_CLEAR = 204
         private const val ID_TOGGLE_MODE = 206
+        private const val ID_FINISH = 207
         private const val ID_STATUS = 205
 
         fun start(context: Context) {
-            val intent = Intent(context, MapEditorActivity::class.java)
-            context.startActivity(intent)
+            context.startActivity(Intent(context, MapEditorActivity::class.java))
         }
     }
 

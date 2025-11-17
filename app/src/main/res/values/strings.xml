@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="google_directions_key">AIzaSyBtfphofBaf_DUtiGFwEb7MPTKP3ZVUTyU</string>
     <string name="expected_end_time_label">Fim Previsto:</string>
     <string name="expected_end_time_placeholder">--:--</string>
     <string name="app_name">SmartDriver</string>

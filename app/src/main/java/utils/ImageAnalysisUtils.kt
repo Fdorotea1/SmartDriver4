@@ -14,11 +14,14 @@ class ImageAnalysisUtils {
 
     companion object {
         private const val TAG = "ImageAnalysisUtils"
-        private const val DEBUG_OFFER = true // mete false quando acabares
 
         // ---------- Normalização ----------
         private fun normalizeSpaces(s: String): String =
-            s.replace(Regex("[\\u00A0\\u2007\\u202F\\u200B\\uFEFF\\s]+"), " ").trim()
+            // normaliza separadores "·" e "•" para espaço, depois comprime espaços (inclui NBSP/ZWSP)
+            s.replace('\u00B7', ' ')
+                .replace('\u2022', ' ')
+                .replace(Regex("[\\u00A0\\u2007\\u202F\\u200B\\uFEFF\\s]+"), " ")
+                .trim()
 
         private fun stripAccentsLower(s: String): String =
             Normalizer.normalize(s, Normalizer.Form.NFD)
@@ -128,6 +131,14 @@ class ImageAnalysisUtils {
         val yCenter: Float
     )
 
+    // Tokens de elementos (para colar “13” “min” “1.9” “km” numa só linha)
+    private data class OcrToken(
+        val text: String,
+        val cx: Float,
+        val cy: Float,
+        val h: Float
+    )
+
     // ---------- Helpers genéricos ----------
     private fun cleanLineForMatching(s: String): String =
         s.replaceFirst(Regex("^[^\\p{L}\\d]+"), "").trim()
@@ -219,109 +230,65 @@ class ImageAnalysisUtils {
         return rows
     }
 
-    // ---------- DEBUG HELPERS ----------
-    private fun dbgDumpRaw(visionText: Text) {
-        val raw = visionText.text ?: ""
-        if (DEBUG_OFFER) {
-            Log.d(TAG, "OFFERDBG_RAW ${if (raw.length > 2000) raw.substring(0, 2000) else raw}")
-        }
-    }
-
-    private fun dbgDumpOcrLines(visionText: Text) {
-        if (!DEBUG_OFFER) return
-        var idx = 0
+    // ---------- NEW: juntar elementos por linha (cola tokens) ----------
+    private fun collectElementsAsTokens(visionText: Text): List<OcrToken> {
+        val tokens = mutableListOf<OcrToken>()
         visionText.textBlocks.forEach { block ->
             block.lines.forEach { line ->
-                val box = line.boundingBox
-                val y = box?.centerY() ?: -1
-                val h = box?.height() ?: -1
-                val t = normalizeSpaces(line.text ?: "")
-                if (t.isNotEmpty()) {
-                    Log.d(TAG, String.format(Locale.US, "OFFERDBG_LINE[%03d] y=%4d h=%3d : %s", idx++, y, h, t))
+                line.elements.forEach { el ->
+                    val t = normalizeSpaces(el.text ?: "")
+                    if (t.isEmpty()) return@forEach
+                    val b = el.boundingBox ?: return@forEach
+                    tokens += OcrToken(
+                        text = t,
+                        cx = b.exactCenterX(),
+                        cy = b.exactCenterY(),
+                        h  = b.height().toFloat().coerceAtLeast(1f)
+                    )
                 }
             }
         }
+        return tokens
     }
 
-    // ---------- BOLT HELPERS (isolados; não afetam Uber) ----------
-    private fun isBoltCard(normalizedOneLine: String): Boolean {
-        // normalizedOneLine já vem sem acentos e em minúsculas
-        return normalizedOneLine.contains("aceitar viagem")
-                || normalizedOneLine.contains("liquidos (com impostos)")
-                || normalizedOneLine.contains("procura elevada")
+    private fun joinSameBaseline(tokens: List<OcrToken>, yToleranceFrac: Float = 0.25f): List<String> {
+        if (tokens.isEmpty()) return emptyList()
+        val rows = mutableListOf<MutableList<OcrToken>>()
+        for (t in tokens.sortedBy { it.cy }) {
+            val last = rows.lastOrNull()
+            val tol = (last?.map { it.h }?.average()?.toFloat() ?: t.h) * yToleranceFrac
+            if (last == null || abs(last.last().cy - t.cy) > tol) {
+                rows.add(mutableListOf(t))
+            } else {
+                last.add(t)
+            }
+        }
+        return rows.map { r -> r.sortedBy { it.cx }.joinToString(" ") { it.text } }
     }
 
-    private data class TimeKmHit(val y: Int, val minutes: Int?, val km: Double?)
-
-    private fun findTimeKmLinesWithY(visionText: Text): List<TimeKmHit> {
-        val hits = mutableListOf<TimeKmHit>()
-        visionText.textBlocks.forEach { block ->
-            block.lines.forEach { line ->
-                val txt = (line.text ?: "").trim()
-                if (txt.isEmpty()) return@forEach
-                val norm = stripAccentsLower(normalizeSpaces(txt))
-                val t = TIME_PATTERN.matcher(norm)
-                val d = KM_PATTERN.matcher(norm)
-                val minutes = if (t.find()) t.group(1)?.toIntOrNull() else null
-                val km = if (d.find()) d.group(1)?.replace(',', '.')?.toDoubleOrNull() else null
-                if (minutes != null || km != null) {
-                    val y = line.boundingBox?.centerY() ?: -1
-                    hits += TimeKmHit(y = y, minutes = minutes, km = km)
+    // ---------- NEW: extrair "13 min · 1.9 km" via tokens colados ----------
+    private fun tryExtractBoltTimeDist(visionText: Text): Pair<String, String>? {
+        val lines = joinSameBaseline(collectElementsAsTokens(visionText))
+        if (lines.isEmpty()) return null
+        var minutes: String? = null
+        var km: String? = null
+        for (ln in lines) {
+            val line = normalizeSpaces(stripAccentsLower(ln))
+            if (minutes == null) {
+                val m = TIME_PATTERN.matcher(line)
+                if (m.find()) minutes = m.group(1)
+            }
+            if (km == null) {
+                val d = KM_PATTERN.matcher(line)
+                if (d.find()) km = d.group(1)?.replace(',', '.')?.let {
+                    it.toDoubleOrNull()?.let { v -> String.format(Locale.US, "%.1f", v) }
                 }
             }
+            if (minutes != null && km != null) break
         }
-        return hits.sortedBy { it.y } // topo -> fundo
-    }
-
-    // --- BOLT: candidatos de morada com Y e “força” para números/coma/CP ---
-    private data class AddressHit(
-        val y: Int,
-        val text: String,
-        val norm: String,
-        val score: Int,
-        val hasNumber: Boolean,
-        val hasComma: Boolean,
-        val hasPostcode: Boolean
-    )
-
-    private fun findBoltAddressCandidates(visionText: Text): List<AddressHit> {
-        val out = mutableListOf<AddressHit>()
-        visionText.textBlocks.forEach { block ->
-            block.lines.forEach { line ->
-                val raw = (line.text ?: "").trim()
-                if (raw.isEmpty()) return@forEach
-                val cleaned = cleanAddressCandidate(raw)
-                if (cleaned.isEmpty()) return@forEach
-                val norm = stripAccentsLower(cleaned)
-                if (isUiNoise(norm)) return@forEach
-                // rejeita linhas com unidades (min/km/etc)
-                if (norm.contains('€') ||
-                    Regex("\\bkm\\b").containsMatchIn(norm) ||
-                    Regex("\\b(min\\.?|minutos?|\\dm\\b)").containsMatchIn(norm)) return@forEach
-
-                // requisitos mais apertados para Bolt (evitar labels de mapa)
-                val hasNumber   = Regex("\\b\\d{1,5}[a-z]??\\b").containsMatchIn(norm)
-                val hasComma    = norm.contains(',')
-                val hasPostcode = Regex("\\b\\d{4}-\\d{3}\\b").containsMatchIn(norm)
-
-                if (!looksLikeAddress(norm)) return@forEach
-                if (!(hasNumber || hasComma || hasPostcode)) return@forEach
-
-                var s = 0
-                s += if (hasNumber) 30 else 0
-                s += if (hasComma)  15 else 0
-                s += if (hasPostcode) 25 else 0
-                if (Regex("rua|avenida|av\\.|travessa|tv\\.|estr\\.|estrada|praça|praca|alameda|largo|rotunda|calcada|calçada|cais|praceta")
-                        .containsMatchIn(norm)) s += 20
-                s += norm.length.coerceAtMost(40) / 2
-                if (norm.length < 8) s -= 20
-
-                val y = line.boundingBox?.centerY() ?: -1
-                out += AddressHit(y, cleaned, norm, s, hasNumber, hasComma, hasPostcode)
-            }
-        }
-        // Ordena por score desc e depois por Y (para desempate consistente)
-        return out.sortedWith(compareByDescending<AddressHit> { it.score }.thenBy { it.y })
+        return if (minutes != null || km != null) {
+            (minutes ?: "") to (km ?: "")
+        } else null
     }
 
     // ---------- API principal ----------
@@ -332,19 +299,11 @@ class ImageAnalysisUtils {
             return null
         }
 
-        // DEBUG: dumps
-        if (DEBUG_OFFER) {
-            dbgDumpRaw(visionText)
-            dbgDumpOcrLines(visionText)
-        }
-
         // Números
         val corrected = applyOcrCorrections(raw)
         val pretty = normalizeSpaces(corrected)
         val normalized = stripAccentsLower(pretty)
         val normalizedOneLine = normalized.replace(Regex("\\s+"), " ")
-        val bolt = isBoltCard(normalizedOneLine)
-        if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_BOLT_DETECT bolt=$bolt")
 
         // MORADAS — sem correções agressivas
         val prettyForAddr = normalizeSpaces(raw)
@@ -358,28 +317,15 @@ class ImageAnalysisUtils {
         val hasMin  = Regex("\\b(min\\.?|minutos?|\\dm\\b)").containsMatchIn(normalized)
         val hasKeyword = OFFER_KEYWORDS.any { normalizedOneLine.contains(it) }
 
-        if (DEBUG_OFFER) {
-            Log.d(TAG, "OFFERDBG_GATE_CHECK euro=$hasEuro km=$hasKm min=$hasMin kw=$hasKeyword")
-        }
+        if (!(hasEuro && hasKm && hasMin && hasKeyword)) return null
 
-        if (!(hasEuro && hasKm && hasMin && hasKeyword)) {
-            if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_EXIT gate_no_offer")
-            return null
-        }
-
-        val valueStr = extractMoney(pretty) ?: run {
-            if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_EXIT no_money_match")
-            return null
-        }
+        val valueStr = extractMoney(pretty) ?: return null
 
         // ---------- Viagem (padrões combinados) ----------
         var tripDuration = ""
         var tripDistance = ""
         for (pat in TRIP_COMBINED_PATTERNS) {
             val m = pat.find(normalized)
-            if (DEBUG_OFFER && m != null) {
-                Log.d(TAG, "OFFERDBG_HIT_TRIP_COMBINED pat='${pat.pattern}'")
-            }
             if (m != null && m.groupValues.size >= 3) {
                 m.groupValues[1].toIntOrNull()?.let { tripDuration = it.toString() }
                 m.groupValues[2].replace(',', '.').toDoubleOrNull()
@@ -388,14 +334,20 @@ class ImageAnalysisUtils {
             }
         }
 
+        // ---------- NEW: tentativa antecipada (Bolt) via tokens colados ----------
+        if (tripDuration.isBlank() || tripDistance.isBlank()) {
+            val td = tryExtractBoltTimeDist(visionText)
+            if (td != null) {
+                if (tripDuration.isBlank() && td.first.isNotBlank()) tripDuration = td.first
+                if (tripDistance.isBlank() && td.second.isNotBlank()) tripDistance = td.second
+            }
+        }
+
         // ---------- Recolha (padrões combinados) ----------
         var pickupDuration = ""
         var pickupDistance = ""
         for (pat in PICKUP_COMBINED_PATTERNS) {
             val m = pat.find(normalized)
-            if (DEBUG_OFFER && m != null) {
-                Log.d(TAG, "OFFERDBG_HIT_PICKUP_COMBINED pat='${pat.pattern}'")
-            }
             if (m != null && m.groupValues.size >= 3) {
                 m.groupValues[1].toIntOrNull()?.let { pickupDuration = it.toString() }
                 m.groupValues[2].replace(',', '.').toDoubleOrNull()
@@ -434,8 +386,6 @@ class ImageAnalysisUtils {
                 )
             }
         }
-
-        if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_CAND count=${candidates.size} tripIdx=$tripLineIndex")
 
         if (candidates.isNotEmpty()) {
             if (tripLineIndex >= 0) {
@@ -477,78 +427,15 @@ class ImageAnalysisUtils {
             }
         }
 
-        // ---------- Tipo de serviço + carimbo plataforma ----------
-        var serviceType = detectServiceType(normalizedOneLine)
-        serviceType = if (bolt) {
-            if (serviceType.isBlank()) "Bolt" else "Bolt • $serviceType"
-        } else {
-            if (serviceType.isBlank()) "Uber" else serviceType
-        }
-
-        // ---------- BOLT: override com geometria (topo = VIAGEM, fundo = RECOLHA) ----------
-        if (bolt) {
-            val tdLines = findTimeKmLinesWithY(visionText)
-            if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_BOLT_TD lines=${tdLines.size} -> $tdLines")
-
-            if (tdLines.size >= 2) {
-                val top    = tdLines.minByOrNull { it.y }!!     // viagem (ex.: 29 / 4.9)
-                val bottom = tdLines.maxByOrNull { it.y }!!     // recolha (ex.: 18 / 3.2)
-
-                val topMin = top.minutes
-                val topKm  = top.km?.let { String.format(Locale.US, "%.1f", it) }
-                val botMin = bottom.minutes
-                val botKm  = bottom.km?.let { String.format(Locale.US, "%.1f", it) }
-
-                // override INCONDICIONAL para Bolt
-                tripDuration   = topMin?.toString() ?: tripDuration
-                tripDistance   = topKm  ?: tripDistance
-                pickupDuration = botMin?.toString() ?: pickupDuration
-                pickupDistance = botKm  ?: pickupDistance
-
-                if (DEBUG_OFFER) {
-                    Log.d(TAG, "OFFERDBG_BOLT_SET2 trip=${tripDuration}/${tripDistance} pickup=${pickupDuration}/${pickupDistance}")
-                }
-            } else if (tdLines.size == 1) {
-                val only = tdLines.first()
-                val oMin = only.minutes
-                val oKm  = only.km?.let { String.format(Locale.US, "%.1f", it) }
-                // com uma linha só, assume viagem
-                tripDuration = oMin?.toString() ?: tripDuration
-                tripDistance = oKm ?: tripDistance
-                if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_BOLT_SET1 trip=${tripDuration}/${tripDistance}")
-            }
-        }
+        val serviceType = detectServiceType(normalizedOneLine)
 
         // ---------- Moradas (1º tentativa: layout-aware; fallback: textual) ----------
         val layoutAddrs = extractAddressesWithLayout(visionText)
-        var (moradaRecolha, moradaDestino) =
+        val (moradaRecolha, moradaDestino) =
             layoutAddrs ?: extractAddresses(addrPrettyLines, addrNormLines)
-
-        // ---------- BOLT: override de moradas (evitar labels de mapa; usar as duas melhores) ----------
-        if (bolt) {
-            val addrHits = findBoltAddressCandidates(visionText)
-            if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_BOLT_ADDR hits=${addrHits.size} -> ${addrHits.take(4)}")
-            if (addrHits.isNotEmpty()) {
-                val topTwo = addrHits
-                    .distinctBy { it.text } // evita duplicados
-                    .sortedBy { it.y }      // ordem vertical
-                    .takeLast(2)            // duas mais em baixo (normalmente as do cartão)
-                    .sortedBy { it.y }      // garante ordem vertical final
-
-                if (topTwo.size == 2) {
-                    moradaRecolha = topTwo[0].text   // acima
-                    moradaDestino = topTwo[1].text   // abaixo
-                } else if (topTwo.size == 1) {
-                    // só uma morada forte — assume destino
-                    moradaDestino = topTwo[0].text
-                }
-                if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_BOLT_ADDR_SET rec='$moradaRecolha' dest='$moradaDestino'")
-            }
-        }
 
         // ---------- Construção ----------
         if (pickupDuration.isBlank() && pickupDistance.isBlank() && tripDuration.isBlank() && tripDistance.isBlank()) {
-            if (DEBUG_OFFER) Log.d(TAG, "OFFERDBG_EXIT no_time_or_distance")
             return null
         }
 
@@ -564,16 +451,6 @@ class ImageAnalysisUtils {
             rawText = prettyForAddr.take(1200)
         )
         offerData.updateCalculatedTotals()
-
-        if (DEBUG_OFFER) {
-            Log.d(
-                TAG,
-                "OFFERDBG_RESULT pickup=${offerData.pickupDuration}/${offerData.pickupDistance} " +
-                        "trip=${offerData.tripDuration}/${offerData.tripDistance} " +
-                        "€='${offerData.value}' rec='${offerData.moradaRecolha}' dest='${offerData.moradaDestino}' " +
-                        "svc='${offerData.serviceType}'"
-            )
-        }
 
         return if (offerData.isValid() && (!offerData.distance.isNullOrEmpty() || !offerData.duration.isNullOrEmpty())) {
             offerData

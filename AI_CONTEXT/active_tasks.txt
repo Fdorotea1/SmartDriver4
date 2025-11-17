@@ -1,0 +1,78 @@
+# SmartDriver — Active Tasks
+# Última atualização: (preencher data manualmente)
+
+## 0) Estado do build
+- Gradle root: ./build.gradle (curto)
+- Gradle app:  ./app/build.gradle (ativo)
+- Manifest:    ./app/src/main/AndroidManifest.xml (139 linhas)
+- OK atual: compila? [sim/não]  | TargetSDK: (preencher) | MinSDK: (preencher)
+
+## 1) Substituir Semáforo por Card Único (topo)
+ID: UI-CARD-001
+Objetivo: Unificar info (moradas, km recolha/destino, oferta) num **card** no 1º terço do ecrã, sem ultrapassar a área de screenshot.
+Critérios de aceitação:
+  - Card visível acima do overlay do minimapa (se ativo).
+  - Texto numa linha quando possível; overflow com ellipsize.
+  - Tema claro (fundo branco), tipografia limpa; valor da oferta a **preto**.
+  - Não interferir com heurísticas de aceitação.
+Ficheiros-alvo:
+  - app/src/main/java/overlay/OverlayView.kt
+  - app/src/main/java/overlay/OverlayService.kt
+  - app/src/main/res/layout/quick_menu_layout.xml  (se necessário)
+Notas:
+  - Manter medidas/funcionalidade o mais próximo possível do atual.
+
+## 2) Mini-Mapa flutuante — largura/altura finas
+ID: MAP-MINI-002
+Objetivo: Ajuste fino para caber texto numa linha.
+Ficheiros-alvo:
+  - app/src/main/java/overlay/widgets/MiniMapOverlay.kt
+  - app/src/main/java/overlay/MiniMapController.kt
+
+## 3) Auto-aceitação (apenas aceitar se cumprir requisitos)
+ID: AUTO-ACCEPT-003
+Objetivo: Automatizar toque “Aceitar” quando critérios (preço/km/tempo) forem cumpridos; **recusar** não é necessário.
+Ficheiros-alvo:
+  - app/src/main/java/utils/ImageAnalysisUtils.kt (extração)
+  - app/src/main/java/utils/OfferEvaluator.kt     (regras)
+  - app/src/main/java/overlay/OverlayIntents.kt    (ação)
+  - app/src/main/java/com/example/smartdriver/OfferManager.kt
+Critérios de aceitação:
+  - Não clica se métricas incompletas/ambíguas.
+  - Log visível no History com motivo da aceitação.
+
+## 4) Zonas (mapa) — render + editor
+ID: ZONES-004
+Objetivo: Garantir coerência entre editor e render (GMap/Overlay).
+Ficheiros-alvo:
+  - app/src/main/java/com/example/smartdriver/zones/*
+Critérios:
+  - Polígonos persistem (ZoneGeoStore).
+  - Render consistente nas duas views.
+
+## 5) Ficheiros candidatos a “legado/baixo uso”
+ID: CLEAN-LEGACY-005
+Heurística (antigos e pequenos): 
+  - app/src/main/java/utils/BorderRating.kt
+  - app/src/main/java/utils/EvaluationResult.kt
+  - app/src/main/java/utils/IndividualRating.kt
+  - app/src/main/java/utils/OfferRating.kt
+Ação proposta:
+  - Marcar como “legacy”; só remover após confirmar não-referência (grep).
+  - Se usados apenas como DTOs, consolidar noutro ficheiro de modelos.
+
+## 6) Ícones antigos e drawables pouco usados
+ID: CLEAN-DRAW-006
+Itens marcados como “possível inativo” pelo índice (ex.: ic_* antigos).
+Ação:
+  - Verificar referências no XML e no código; apagar os **sem uso**.
+
+## 7) Bugs que já vimos no passado (para quando surgirem)
+ID: BUGS-QUEUE-007
+- “Returns are not allowed for functions with expression body” em OverlayView.kt → trocar expressão por block body `{ ... }`.
+- “Unresolved reference: offer” → verificar import/renomeação de `OfferQueue`/`OfferManager`, ou campo `offer` vs `currentOffer`.
+
+## Log rápido (últimas decisões)
+- 2025-11-11: Removida árvore fantasma SmartDriver/SmartDriver4.
+- 2025-11-11: Índice regenerado; 134 ficheiros ativos; 105 provável-ativos.
+

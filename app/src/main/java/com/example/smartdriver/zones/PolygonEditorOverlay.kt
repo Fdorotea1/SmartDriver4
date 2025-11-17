@@ -1,293 +1,335 @@
 package com.example.smartdriver.zones
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Path
-import android.graphics.Point
-import android.view.GestureDetector
+import android.graphics.*
 import android.view.MotionEvent
-import android.view.ViewConfiguration
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.model.LatLng
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Overlay
 import kotlin.math.hypot
+import kotlin.math.min
 
 /**
- * Editor de polígonos:
- *  • Modo PONTOS: toque adiciona ponto; duplo toque finaliza.
- *  • Modo DESENHO_LIVRE: arrasta o dedo para desenhar; ao levantar finaliza.
- *  • Arrastar "handles": tocar perto de um vértice e mover para ajustar.
- *  • Undo/Redo e Limpar.
- *  • Long-press (quando não estás a desenhar) → pede edição da zona por baixo do dedo.
+ * Editor de polígonos por cima do GoogleMap.
+ * - PONTOS: tap no mapa adiciona ponto; tocar perto do 1.º ponto (com 3+) conclui.
+ * - DESENHO_LIVRE: arrastar no overlay; ao levantar conclui.
+ * Só intercepta toques quando arrastas um handle ou estás a desenhar em livre.
  */
 class PolygonEditorOverlay(
-    context: Context
-) : Overlay() {
+    private val context: Context,
+    private val gmap: GoogleMap,
+    private val overlayParent: ViewGroup
+) {
 
     enum class Mode { PONTOS, DESENHO_LIVRE }
+    var mode: Mode = Mode.PONTOS
 
     var onChange: (() -> Unit)? = null
     var onFinalize: ((List<GeoPoint>, ZoneType) -> Unit)? = null
 
-    /** Pedido de edição ao long-press. O MapEditorActivity decide qual zona editar. */
-    var onLongPressRequestEdit: ((GeoPoint) -> Unit)? = null
-
-    private val points: MutableList<GeoPoint> = mutableListOf()
-    private val undoStack: MutableList<List<GeoPoint>> = mutableListOf()
-    private val redoStack: MutableList<List<GeoPoint>> = mutableListOf()
-
     private var currentType: ZoneType = ZoneType.NO_GO
+    private val points: MutableList<GeoPoint> = mutableListOf()
 
-    // Propriedade do modo
-    var mode: Mode = Mode.PONTOS
+    // Undo/Redo
+    private val history: MutableList<List<GeoPoint>> = mutableListOf()
+    private var historyIndex = -1
 
-    // Drag de vértices
-    private var dragIndex: Int = -1
-    private var dragging = false
-    private val handleRadiusPx: Float
-    private val touchSlop: Int
+    private var editorView: EditorView? = null
 
-    // Desenho livre
-    private var freehandActive = false
-    private var lastX = 0f
-    private var lastY = 0f
-    private val freehandMinDeltaPx = 8f
+    init { ensureView() }
 
-    private val gesture = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            if (mode != Mode.PONTOS || dragging || freehandActive) return false
-            val mv = mapView ?: return false
-            val p = mv.projection.fromPixels(e.x.toInt(), e.y.toInt()) as GeoPoint
-            snapshotForUndo()
-            points.add(p)
-            onChange?.invoke()
-            mv.invalidate()
-            return true
+    // ===== API =====
+
+    /** Tap do Google Map (PONTOS). */
+    fun onMapTap(latLng: LatLng) {
+        if (mode != Mode.PONTOS) return
+        val gp = GeoPoint(latLng.latitude, latLng.longitude)
+        if (points.size >= 3 && tapNearFirstPoint(latLng)) {
+            finalizeIfPossible()
+            return
         }
-
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            if (mode == Mode.PONTOS) {
-                finalizePolygonIfValid()
-                mapView?.invalidate()
-                return true
-            }
-            return false
-        }
-
-        override fun onLongPress(e: MotionEvent) {
-            // Só dispara quando não estamos a desenhar/draggar
-            if (dragging || freehandActive || points.isNotEmpty()) return
-            val mv = mapView ?: return
-            val gp = mv.projection.fromPixels(e.x.toInt(), e.y.toInt()) as GeoPoint
-            onLongPressRequestEdit?.invoke(gp)
-        }
-    })
-
-    init {
-        val vc = ViewConfiguration.get(context)
-        touchSlop = vc.scaledTouchSlop
-        handleRadiusPx = 24f * (context.resources.displayMetrics.density)
+        addPoint(gp)
     }
 
-    // API pública
-    fun setPolygon(pts: List<GeoPoint>, type: ZoneType) {
-        points.clear()
-        points.addAll(pts.map { GeoPoint(it.latitude, it.longitude) })
-        currentType = type
-        undoStack.clear()
-        redoStack.clear()
-        dragIndex = -1
-        dragging = false
-        freehandActive = false
+    fun addPoint(gp: GeoPoint) {
+        points.add(GeoPoint(gp.latitude, gp.longitude))
+        pushHistory()
+        editorView?.invalidate()
         onChange?.invoke()
-        mapView?.invalidate()
     }
 
-    fun setType(type: ZoneType) {
+    /** Chamar do menu para tentar concluir. */
+    fun finalizeIfPossible() {
+        if (points.size >= 3) {
+            onFinalize?.invoke(points.map { GeoPoint(it.latitude, it.longitude) }, currentType)
+            clear()
+        }
+    }
+
+    fun setPolygon(src: List<GeoPoint>, type: ZoneType) {
         currentType = type
-        mapView?.invalidate()
-    }
-
-    fun clear() {
-        if (points.isNotEmpty()) snapshotForUndo()
         points.clear()
-        dragIndex = -1
-        dragging = false
-        freehandActive = false
+        points.addAll(src.map { GeoPoint(it.latitude, it.longitude) })
+        pushHistory()
+        editorView?.invalidate()
         onChange?.invoke()
-        mapView?.invalidate()
     }
 
     fun undo(): Boolean {
-        if (undoStack.isEmpty()) return false
-        val last = undoStack.removeAt(undoStack.size - 1)
-        redoStack.add(points.map { GeoPoint(it.latitude, it.longitude) })
-        points.clear()
-        points.addAll(last)
-        onChange?.invoke()
-        mapView?.invalidate()
+        if (historyIndex <= 0) return false
+        historyIndex--
+        restoreHistory()
         return true
     }
 
     fun redo(): Boolean {
-        if (redoStack.isEmpty()) return false
-        val next = redoStack.removeAt(redoStack.size - 1)
-        undoStack.add(points.map { GeoPoint(it.latitude, it.longitude) })
-        points.clear()
-        points.addAll(next)
-        onChange?.invoke()
-        mapView?.invalidate()
+        if (historyIndex < 0 || historyIndex >= history.size - 1) return false
+        historyIndex++
+        restoreHistory()
         return true
     }
 
-    private fun snapshotForUndo() {
-        undoStack.add(points.map { GeoPoint(it.latitude, it.longitude) })
-        if (undoStack.size > 100) undoStack.removeAt(0)
-        redoStack.clear()
-    }
-
-    private fun finalizePolygonIfValid() {
-        if (points.size >= 3) {
-            onFinalize?.invoke(points.toList(), currentType)
-        }
+    fun clear() {
         points.clear()
-        undoStack.clear()
-        redoStack.clear()
-        dragIndex = -1
-        dragging = false
-        freehandActive = false
+        history.clear()
+        historyIndex = -1
+        editorView?.invalidate()
         onChange?.invoke()
     }
 
-    // ----- Input -----
-    override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
-        this.mapView = mapView
-
-        // 1) Drag de handle tem prioridade
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                // Procura handle perto
-                val idx = findHandleNear(event.x, event.y, mapView)
-                if (idx >= 0) {
-                    dragIndex = idx
-                    dragging = true
-                    snapshotForUndo()
-                    return true
-                }
-
-                if (mode == Mode.DESENHO_LIVRE) {
-                    // Inicia desenho livre
-                    snapshotForUndo()
-                    points.clear()
-                    val gp = (mapView.projection.fromPixels(event.x.toInt(), event.y.toInt()) as GeoPoint)
-                    points.add(gp)
-                    freehandActive = true
-                    lastX = event.x
-                    lastY = event.y
-                    onChange?.invoke()
-                    mapView.invalidate()
-                    return true
-                }
-            }
-
-            MotionEvent.ACTION_MOVE -> {
-                if (dragging && dragIndex >= 0) {
-                    val gp = (mapView.projection.fromPixels(event.x.toInt(), event.y.toInt()) as GeoPoint)
-                    points[dragIndex] = gp
-                    onChange?.invoke()
-                    mapView.invalidate()
-                    return true
-                }
-                if (freehandActive && mode == Mode.DESENHO_LIVRE) {
-                    val dx = event.x - lastX
-                    val dy = event.y - lastY
-                    if (hypot(dx.toDouble(), dy.toDouble()) >= freehandMinDeltaPx) {
-                        lastX = event.x
-                        lastY = event.y
-                        val gp = (mapView.projection.fromPixels(event.x.toInt(), event.y.toInt()) as GeoPoint)
-                        points.add(gp)
-                        onChange?.invoke()
-                        mapView.invalidate()
-                    }
-                    return true
-                }
-            }
-
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (dragging) {
-                    dragging = false
-                    dragIndex = -1
-                    mapView.invalidate()
-                    return true
-                }
-                if (freehandActive && mode == Mode.DESENHO_LIVRE) {
-                    freehandActive = false
-                    finalizePolygonIfValid()
-                    mapView.invalidate()
-                    return true
-                }
-            }
-        }
-
-        // 2) Se não houve drag/desenho, o GestureDetector trata toques e long-press
-        return gesture.onTouchEvent(event)
+    fun dispose() {
+        editorView?.let { overlayParent.removeView(it) }
+        editorView = null
+        history.clear()
+        points.clear()
     }
 
-    private fun findHandleNear(x: Float, y: Float, mapView: MapView): Int {
-        if (points.isEmpty()) return -1
-        val pj = mapView.projection
-        val pt = Point()
-        var bestIdx = -1
-        var bestDist = Float.MAX_VALUE
-        for (i in points.indices) {
-            pj.toPixels(points[i], pt)
-            val d = hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()).toFloat()
-            if (d < bestDist) {
-                bestDist = d
-                bestIdx = i
-            }
-        }
-        return if (bestDist <= handleRadiusPx) bestIdx else -1
-    }
+    fun invalidateOverlay() { editorView?.invalidate() }
 
-    // ----- Draw -----
-    override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
-        if (shadow) return
-        this.mapView = mapView
+    // ===== Internos =====
 
-        if (points.isEmpty()) return
-
-        val style = ZoneDefaults.styleFor(currentType)
-        val fill = ZonePainter.fillPaint(style)
-        val stroke = ZonePainter.strokePaint(style)
-
-        val pj = mapView.projection
-        val path = Path()
-        val pt = Point()
-
-        points.firstOrNull()?.let {
-            pj.toPixels(it, pt)
-            path.moveTo(pt.x.toFloat(), pt.y.toFloat())
-        }
-
-        for (i in 1 until points.size) {
-            pj.toPixels(points[i], pt)
-            path.lineTo(pt.x.toFloat(), pt.y.toFloat())
-        }
-
-        // No desenho livre não fechamos; no modo PONTOS fecha só ao finalizar
-        canvas.drawPath(path, fill)
-        canvas.drawPath(path, stroke)
-
-        // Handles
-        val handleStroke = ZonePainter.strokePaint(
-            ZoneStyle(0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 2f)
+    private fun ensureView() {
+        if (editorView != null) return
+        val v = EditorView(context)
+        overlayParent.addView(
+            v,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
         )
-        for (gp in points) {
-            pj.toPixels(gp, pt)
-            canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 6f, handleStroke)
-        }
+        editorView = v
     }
 
-    private var mapView: MapView? = null
+    private fun pushHistory() {
+        val snap = points.map { GeoPoint(it.latitude, it.longitude) }
+        if (historyIndex >= 0 && historyIndex < history.lastIndex) {
+            while (history.size - 1 > historyIndex) history.removeAt(history.lastIndex)
+        }
+        history.add(snap)
+        historyIndex = history.lastIndex
+    }
+
+    private fun restoreHistory() {
+        points.clear()
+        points.addAll(history[historyIndex].map { GeoPoint(it.latitude, it.longitude) })
+        editorView?.invalidate()
+        onChange?.invoke()
+    }
+
+    private fun tapNearFirstPoint(latLng: LatLng): Boolean {
+        if (points.isEmpty()) return false
+        val first = points.first()
+        val pj = gmap.projection
+        val pFirst = pj.toScreenLocation(LatLng(first.latitude, first.longitude))
+        val pTap = pj.toScreenLocation(latLng)
+        val dist = hypot((pTap.x - pFirst.x).toDouble(), (pTap.y - pFirst.y).toDouble())
+        val slop = 28.0 // px
+        return dist <= slop
+    }
+
+    // ===== View do Editor =====
+
+    private inner class EditorView(ctx: Context) : View(ctx) {
+
+        private val paintLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4f
+            color = Color.BLACK
+        }
+        private val paintFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.argb(48, 33, 33, 33)
+        }
+        private val paintHandle = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.WHITE
+        }
+        private val paintHandleStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            color = Color.BLACK
+        }
+
+        private val handleRadius = 16f
+        private var draggingIndex = -1
+
+        // desenho livre
+        private var drawing = false
+        private var freehandPath: Path = Path()
+        private val freehandPtsPx: MutableList<PointF> = mutableListOf()
+
+        override fun onDraw(c: Canvas) {
+            super.onDraw(c)
+
+            val scrPts = pointsToScreen(points)
+            if (scrPts.size >= 2) {
+                val path = Path()
+                path.moveTo(scrPts[0].x, scrPts[0].y)
+                for (i in 1 until scrPts.size) path.lineTo(scrPts[i].x, scrPts[i].y)
+                if (scrPts.size >= 3) path.close()
+
+                val (fill, stroke) = colorsFor(currentType)
+                paintFill.color = fill
+                paintLine.color = stroke
+                c.drawPath(path, paintFill)
+                c.drawPath(path, paintLine)
+
+                for (p in scrPts) {
+                    c.drawCircle(p.x, p.y, handleRadius, paintHandle)
+                    c.drawCircle(p.x, p.y, handleRadius, paintHandleStroke)
+                }
+            }
+
+            if (drawing && mode == Mode.DESENHO_LIVRE) {
+                // Desenho livre em stroke enquanto desenhas
+                paintLine.color = Color.BLACK
+                c.drawPath(freehandPath, paintLine)
+            }
+        }
+
+        override fun onTouchEvent(e: MotionEvent): Boolean {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (mode == Mode.DESENHO_LIVRE) {
+                        drawing = true
+                        freehandPath.reset()
+                        freehandPtsPx.clear()
+                        freehandPath.moveTo(e.x, e.y)
+                        freehandPtsPx += PointF(e.x, e.y)
+                        parent.requestDisallowInterceptTouchEvent(true)
+                        invalidate()
+                        return true
+                    } else {
+                        // PONTOS: só intercepta se agarrar handle
+                        val idx = hitHandle(e.x, e.y)
+                        if (idx >= 0) {
+                            draggingIndex = idx
+                            parent.requestDisallowInterceptTouchEvent(true)
+                            return true
+                        }
+                        return false // deixa o mapa pan/zoom
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (mode == Mode.DESENHO_LIVRE && drawing) {
+                        val last = freehandPtsPx.lastOrNull()
+                        val p = PointF(e.x, e.y)
+                        if (last == null || hypot((p.x - last.x).toDouble(), (p.y - last.y).toDouble()) > 6.0) {
+                            freehandPtsPx += p
+                            freehandPath.lineTo(p.x, p.y)
+                            invalidate()
+                        }
+                        return true
+                    } else if (draggingIndex >= 0) {
+                        val gp = screenToGeo(e.x, e.y)
+                        points[draggingIndex] = gp
+                        onChange?.invoke()
+                        invalidate()
+                        return true
+                    }
+                    return false
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (mode == Mode.DESENHO_LIVRE && drawing) {
+                        drawing = false
+                        val simplified = simplifyFreehand(freehandPtsPx)
+                        val geo = simplified.map { screenToGeo(it.x, it.y) }
+                        if (geo.size >= 3) {
+                            points.clear(); points.addAll(geo)
+                            pushHistory()
+                            onChange?.invoke()
+                            onFinalize?.invoke(points.map { GeoPoint(it.latitude, it.longitude) }, currentType)
+                            clear()
+                        }
+                        parent.requestDisallowInterceptTouchEvent(false)
+                        return true
+                    } else if (draggingIndex >= 0) {
+                        draggingIndex = -1
+                        pushHistory()
+                        parent.requestDisallowInterceptTouchEvent(false)
+                        return true
+                    }
+                    return false
+                }
+            }
+            return false
+        }
+
+        private fun hitHandle(x: Float, y: Float): Int {
+            val scr = pointsToScreen(points)
+            for (i in scr.indices.reversed()) {
+                val p = scr[i]
+                if (hypot((x - p.x).toDouble(), (y - p.y).toDouble()) <= handleRadius * 1.6) return i
+            }
+            return -1
+        }
+
+        private fun pointsToScreen(src: List<GeoPoint>): List<PointF> {
+            if (src.isEmpty()) return emptyList()
+            val pj = gmap.projection ?: return emptyList()
+            val out = ArrayList<PointF>(src.size)
+            for (gp in src) {
+                val pt = pj.toScreenLocation(LatLng(gp.latitude, gp.longitude))
+                out.add(PointF(pt.x.toFloat(), pt.y.toFloat()))
+            }
+            return out
+        }
+
+        private fun screenToGeo(x: Float, y: Float): GeoPoint {
+            val latLng = gmap.projection.fromScreenLocation(android.graphics.Point(x.toInt(), y.toInt()))
+            return GeoPoint(latLng.latitude, latLng.longitude)
+        }
+
+        private fun colorsFor(t: ZoneType): Pair<Int, Int> = when (t) {
+            ZoneType.NO_GO      -> Color.argb(60, 183, 28, 28) to Color.parseColor("#B71C1C")
+            ZoneType.SOFT_AVOID -> Color.argb(55, 230, 81, 0)  to Color.parseColor("#E65100")
+            ZoneType.PREFERRED  -> Color.argb(55, 46, 125, 50) to Color.parseColor("#2E7D32")
+        }
+
+        // simplificação da linha livre
+        private fun simplifyFreehand(src: List<PointF>): List<PointF> {
+            if (src.size <= 3) return src
+            val out = ArrayList<PointF>(src.size)
+            var last = src.first()
+            out += last
+            for (i in 1 until src.size - 1) {
+                val p = src[i]
+                if (hypot((p.x - last.x).toDouble(), (p.y - last.y).toDouble()) >= 6.0) {
+                    out += p
+                    last = p
+                }
+            }
+            out += src.last()
+            // evita demasiados pontos (limita ~ 200)
+            if (out.size > 200) {
+                val step = maxOf(1, out.size / 200)
+                return out.filterIndexed { idx, _ -> idx % step == 0 || idx == out.lastIndex }
+            }
+            return out
+        }
+    }
 }

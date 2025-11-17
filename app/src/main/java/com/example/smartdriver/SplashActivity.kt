@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.example.smartdriver.permissions.OnboardingActivity
 import com.example.smartdriver.permissions.OnboardingPrefs
+import com.example.smartdriver.R
 
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : AppCompatActivity() {
@@ -89,9 +90,7 @@ class SplashActivity : AppCompatActivity() {
                         AnimatorSet().apply {
                             playTogether(fadeTitle, fadeTag)
                             addListener(object : AnimatorListenerAdapter() {
-                                override fun onAnimationEnd(animation: Animator) {
-                                    goToMain()
-                                }
+                                override fun onAnimationEnd(animation: Animator) { goToMain() }
                             })
                             start()
                         }

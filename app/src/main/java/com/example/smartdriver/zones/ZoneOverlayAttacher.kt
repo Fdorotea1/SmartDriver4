@@ -1,45 +1,27 @@
 package com.example.smartdriver.zones
 
-import android.content.Context
-import org.osmdroid.views.MapView
+import android.app.Activity
+import com.google.android.gms.maps.GoogleMap
 
 /**
- * Liga zonas ao mapa OSMDroid e refresca sempre que o ZoneRepository grava.
+ * Adaptador minimal para ligar o renderer de zonas ao Google Maps.
+ * Mantém o nome do ficheiro/classe para compatibilidade com chamadas antigas.
  */
-class ZoneOverlayAttacher private constructor() {
+object ZoneOverlayAttacher {
 
-    private var map: MapView? = null
-    private var overlay: ZonesRenderOverlay? = null
-
-    private val repoListener = object : ZoneRepository.SaveListener {
-        override fun onDirty() { /* noop */ }
-        override fun onSaved(success: Boolean) {
-            map?.invalidate()
-        }
+    /**
+     * Cria e devolve um renderer de zonas para o mapa fornecido.
+     * (Substitui a antiga assinatura que devolvia um Overlay do OSMDroid.)
+     */
+    fun attach(activity: Activity, map: GoogleMap): ZonesRenderOverlay {
+        return ZonesRenderOverlay(activity, map)
     }
 
-    fun attachOsmdroid(context: Context, mapView: MapView): ZoneOverlayAttacher {
-        detach()
-        map = mapView
-        overlay = ZonesRenderOverlay(context).also { mapView.overlays.add(it) }
-        mapView.invalidate()
-        ZoneRepository.addListener(repoListener)
-        return this
-    }
-
-    fun refresh() { map?.invalidate() }
-
-    fun detach() {
-        ZoneRepository.removeListener(repoListener)
-        overlay?.let { ov ->
-            map?.overlays?.remove(ov)
-            map?.invalidate()
-        }
-        overlay = null
-        map = null
-    }
-
-    companion object {
-        fun create(): ZoneOverlayAttacher = ZoneOverlayAttacher()
+    /**
+     * Compat: algumas versões antigas chamavam "detach" no overlay.
+     * Aqui apenas limpa os polígonos do renderer.
+     */
+    fun detach(renderer: ZonesRenderOverlay?) {
+        renderer?.clear()
     }
 }
